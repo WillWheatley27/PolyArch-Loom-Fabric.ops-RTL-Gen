@@ -1,5 +1,10 @@
 // fu_add_sub.sv -- Fabric FU for share group add_sub.
-// STUB: interface only, datapath intentionally wrong (replaced in Task 2).
+// op_list: arith.addi, arith.subi
+//   op_sel = 0 -> out = a + b   (arith.addi)
+//   op_sel = 1 -> out = a - b   (arith.subi)  [add with operand B inverted + carry-in]
+//
+// One shared adder; op_sel is a held config input (no handshake).
+// Combinational, intrinsic latency 0.
 
 module fu_add_sub #(
   parameter int unsigned WIDTH = 32
@@ -24,14 +29,14 @@ module fu_add_sub #(
   input  logic              out_ready
 );
 
+  // Handshake: 2-input join, combinational, lossless backpressure.
   assign out_valid  = in_valid_0 & in_valid_1;
   assign in_ready_0 = out_ready & out_valid;
   assign in_ready_1 = out_ready & out_valid;
 
-  // verilator lint_off UNUSEDSIGNAL
-  logic unused_op_sel;
-  assign unused_op_sel = op_sel;
-  // verilator lint_on UNUSEDSIGNAL
-  assign out_data = {WIDTH{1'b0}};   // STUB wrong
+  // Shared datapath: subtract = add with operand B inverted and carry-in = 1.
+  logic [WIDTH-1:0] b_eff;
+  assign b_eff    = op_sel ? ~in_data_1 : in_data_1;
+  assign out_data = in_data_0 + b_eff + {{(WIDTH-1){1'b0}}, op_sel};
 
 endmodule : fu_add_sub
