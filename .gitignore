@@ -1,0 +1,9 @@
+build/
+*.vcd
+*.log
+obj_dir*/
+simv*
+csrc/
+__pycache__/
+*.pyc
+.superpowers/

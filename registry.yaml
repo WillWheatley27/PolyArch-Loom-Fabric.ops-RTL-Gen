@@ -1,0 +1,155 @@
+groups:
+  # --- Integer Arithmetic ---
+  - id: 1
+    name: add_sub
+    family: int_arith
+    ops: [arith.addi, arith.subi]
+    rtl_module: fu_add_sub.sv
+    status: not_started   # not_started | rtl_done | tb_done | verified
+    params: {width: 32}
+
+  - id: 2
+    name: div_rem_signed
+    family: int_arith
+    ops: [arith.divsi, arith.remsi]
+    rtl_module: fu_div_rem_signed.sv
+    status: not_started
+    params: {width: 32}
+
+  - id: 3
+    name: div_rem_unsigned
+    family: int_arith
+    ops: [arith.divui, arith.remui]
+    rtl_module: fu_div_rem_unsigned.sv
+    status: not_started
+    params: {width: 32}
+
+  - id: 4
+    name: barrel_shift
+    family: int_arith
+    ops: [arith.shli, arith.shrsi, arith.shrui]
+    rtl_module: fu_barrel_shift.sv
+    status: not_started
+    params: {width: 32}
+
+  - id: 5
+    name: bitwise_alu
+    family: int_arith
+    ops: [arith.andi, arith.ori, arith.xori]
+    rtl_module: fu_bitwise_alu.sv
+    status: not_started
+    params: {width: 32}
+
+  - id: 6
+    name: min_max_signed
+    family: int_arith
+    ops: [arith.minsi, arith.maxsi]
+    rtl_module: fu_min_max_signed.sv
+    status: not_started
+    params: {width: 32}
+
+  - id: 7
+    name: min_max_unsigned
+    family: int_arith
+    ops: [arith.minui, arith.maxui]
+    rtl_module: fu_min_max_unsigned.sv
+    status: not_started
+    params: {width: 32}
+
+  - id: 8
+    name: int_to_fp
+    family: int_arith
+    ops: [arith.sitofp, arith.uitofp]
+    rtl_module: fu_int_to_fp.sv
+    status: not_started
+    params: {int_width: 32, fp_width: 32}
+
+  - id: 9
+    name: fp_to_int
+    family: int_arith
+    ops: [arith.fptosi, arith.fptoui]
+    rtl_module: fu_fp_to_int.sv
+    status: not_started
+    params: {fp_width: 32, int_width: 32}
+
+  # --- Floating-Point Arithmetic ---
+  - id: 10
+    name: fp_add_sub
+    family: fp_arith
+    ops: [arith.addf, arith.subf]
+    rtl_module: fu_fp_add_sub.sv
+    status: not_started
+    params: {width: 32}
+
+  - id: 11
+    name: fp_div_rem
+    family: fp_arith
+    ops: [arith.divf, arith.remf]
+    rtl_module: fu_fp_div_rem.sv
+    status: not_started
+    params: {width: 32}
+
+  - id: 12
+    name: fp_min_max
+    family: fp_arith
+    ops: [arith.minimumf, arith.maximumf]
+    rtl_module: fu_fp_min_max.sv
+    status: not_started
+    params: {width: 32}
+
+  # --- Math / Transcendentals ---
+  - id: 13
+    name: cordic_trig
+    family: math
+    ops: [math.sin, math.cos]
+    rtl_module: fu_cordic_trig.sv
+    status: not_started
+    params: {width: 32, iterations: 16}
+
+  - id: 14
+    name: cordic_hyp
+    family: math
+    ops: [math.sinh, math.cosh]
+    rtl_module: fu_cordic_hyp.sv
+    status: not_started
+    params: {width: 32, iterations: 16}
+
+  - id: 15
+    name: exp_series
+    family: math
+    ops: [math.exp, math.exp2, math.expm1]
+    rtl_module: fu_exp_series.sv
+    status: not_started
+    params: {width: 32}
+
+  - id: 16
+    name: log_core
+    family: math
+    ops: [math.log, math.log2, math.log10, math.log1p]
+    rtl_module: fu_log_core.sv
+    status: not_started
+    params: {width: 32}
+
+  - id: 17
+    name: rounding
+    family: math
+    ops: [math.floor, math.ceil, math.round, math.trunc, math.roundeven]
+    rtl_module: fu_rounding.sv
+    status: not_started
+    params: {width: 32}
+
+  - id: 18
+    name: sqrt_rsqrt
+    family: math
+    ops: [math.sqrt, math.rsqrt]
+    rtl_module: fu_sqrt_rsqrt.sv
+    status: not_started
+    params: {width: 32, iterations: 8}
+
+  - id: 19
+    name: approx_tanh_erf
+    family: math
+    ops: [math.tanh, math.erf]
+    rtl_module: fu_approx_tanh_erf.sv
+    status: not_started
+    params: {width: 32}
