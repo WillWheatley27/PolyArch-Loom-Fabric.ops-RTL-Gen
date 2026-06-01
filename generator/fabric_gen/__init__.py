@@ -6,6 +6,7 @@ from .errors import (
 )
 from .parser import ParsedOp, parse_op_string
 from .sharegroups import ShareGroup, validate
+from .generator import generate
 
 __all__ = [
     "FabricGenError",
@@ -16,4 +17,5 @@ __all__ = [
     "parse_op_string",
     "ShareGroup",
     "validate",
+    "generate",
 ]

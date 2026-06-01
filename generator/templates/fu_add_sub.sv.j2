@@ -1,0 +1,42 @@
+// {{ module_name }}.sv -- Fabric FU for share group add_sub.
+// op_list: {{ op_list | join(', ') }}
+//   op_sel = 0 -> out = a + b   ({{ op_list[0] }})
+//   op_sel = 1 -> out = a - b   ({{ op_list[1] }})  [add with operand B inverted + carry-in]
+//
+// One shared adder; op_sel is a held config input (no handshake).
+// Combinational, intrinsic latency 0.
+
+module {{ module_name }} #(
+  parameter int unsigned WIDTH = {{ width }}
+) (
+  // verilator lint_off UNUSEDSIGNAL
+  input  logic              clk,
+  input  logic              rst_n,
+  // verilator lint_on UNUSEDSIGNAL
+
+  input  logic              op_sel,
+
+  input  logic [WIDTH-1:0]  in_data_0,
+  input  logic              in_valid_0,
+  output logic              in_ready_0,
+
+  input  logic [WIDTH-1:0]  in_data_1,
+  input  logic              in_valid_1,
+  output logic              in_ready_1,
+
+  output logic [WIDTH-1:0]  out_data,
+  output logic              out_valid,
+  input  logic              out_ready
+);
+
+  // Handshake: 2-input join, combinational, lossless backpressure.
+  assign out_valid  = in_valid_0 & in_valid_1;
+  assign in_ready_0 = out_ready & out_valid;
+  assign in_ready_1 = out_ready & out_valid;
+
+  // Shared datapath: subtract = add with operand B inverted and carry-in = 1.
+  logic [WIDTH-1:0] b_eff;
+  assign b_eff    = op_sel ? ~in_data_1 : in_data_1;
+  assign out_data = in_data_0 + b_eff + {{ carry_term }};
+
+endmodule : {{ module_name }}
