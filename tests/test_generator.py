@@ -52,3 +52,22 @@ def test_generate_illegal_op_list_raises(tmp_path):
     with pytest.raises(ShareGroupError):
         generate("fabric.op[@arith.addi, @arith.muli]", tmp_path,
                  registry_path=ROOT / "registry.yaml")
+
+
+def test_cli_generates_file(tmp_path, monkeypatch):
+    from fabric_gen.__main__ import main
+
+    monkeypatch.chdir(ROOT)  # so default registry.yaml resolves
+    rc = main(["fabric.op[@arith.addi, @arith.subi]", "-o", str(tmp_path)])
+    assert rc == 0
+    assert (tmp_path / "fu_add_sub.sv").exists()
+
+
+def test_cli_illegal_returns_nonzero(tmp_path, monkeypatch, capsys):
+    from fabric_gen.__main__ import main
+
+    monkeypatch.chdir(ROOT)
+    rc = main(["fabric.op[@arith.addi, @arith.muli]", "-o", str(tmp_path)])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "fabric-gen error: share-group:" in err
