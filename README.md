@@ -35,7 +35,7 @@ PYTHONPATH=generator ./.venv/bin/python -m fabric_gen "fabric.op[@arith.addi, @a
 
 # Python API
 PYTHONPATH=generator ./.venv/bin/python -c \
-  "from fabric_gen import generate; print(generate('fabric.op[arith.addi]', 'build/rtl'))"
+  "from fabric_gen import generate; print(generate('fabric.op[@arith.addi, @arith.subi]', 'build/rtl'))"
 ```
 
 The parser and share-group validator are general (any op string, all 19 groups).

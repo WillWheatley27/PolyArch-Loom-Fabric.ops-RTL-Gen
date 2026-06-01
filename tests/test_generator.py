@@ -71,3 +71,12 @@ def test_cli_illegal_returns_nonzero(tmp_path, monkeypatch, capsys):
     assert rc == 1
     err = capsys.readouterr().err
     assert "fabric-gen error: share-group:" in err
+
+
+def test_generate_singleton_unmatched_raises(tmp_path):
+    from fabric_gen.generator import generate
+    from fabric_gen.errors import RegistryError
+
+    with pytest.raises(RegistryError):
+        generate("fabric.op[arith.addi]", tmp_path,
+                 registry_path=ROOT / "registry.yaml")

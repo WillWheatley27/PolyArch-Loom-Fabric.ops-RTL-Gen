@@ -2,7 +2,7 @@
 
 import yaml
 
-from .errors import FabricGenError
+from .errors import RegistryError
 
 
 def load_registry(path):
@@ -16,4 +16,4 @@ def lookup_by_ops(op_list, registry):
     for grp in registry:
         if set(grp["ops"]) == target:
             return grp
-    raise FabricGenError(f"no registry group matches ops {sorted(target)}")
+    raise RegistryError(f"no registry group matches ops {sorted(target)}")

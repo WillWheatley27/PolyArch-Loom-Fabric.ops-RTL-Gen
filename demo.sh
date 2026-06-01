@@ -5,6 +5,7 @@ cd "$(dirname "$0")"
 
 OUT=build/demo
 rm -rf "$OUT"
+mkdir -p "$OUT"
 
 # Python via project venv if present, else system python3.
 PY="./.venv/bin/python"

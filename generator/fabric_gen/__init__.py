@@ -3,6 +3,7 @@ from .errors import (
     ParseError,
     ShareGroupError,
     TemplateNotImplemented,
+    RegistryError,
 )
 from .parser import ParsedOp, parse_op_string
 from .sharegroups import ShareGroup, validate
@@ -13,6 +14,7 @@ __all__ = [
     "ParseError",
     "ShareGroupError",
     "TemplateNotImplemented",
+    "RegistryError",
     "ParsedOp",
     "parse_op_string",
     "ShareGroup",

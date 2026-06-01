@@ -4,6 +4,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 cd "$ROOT"
+mkdir -p build
 
 if ! command -v verilator >/dev/null 2>&1; then
   if type module >/dev/null 2>&1; then module load verilator/5.044; fi

@@ -15,3 +15,7 @@ class ShareGroupError(FabricGenError):
 
 class TemplateNotImplemented(FabricGenError):
     category = "unsupported-op"
+
+
+class RegistryError(FabricGenError):
+    category = "registry"
