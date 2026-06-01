@@ -7,3 +7,4 @@ csrc/
 __pycache__/
 *.pyc
 .superpowers/
+.venv/
