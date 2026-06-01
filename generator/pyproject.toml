@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fabric_gen"
+version = "0.1.0"
+description = "Fabric FU RTL generator (share-group aware)"
+requires-python = ">=3.9"
+dependencies = ["jinja2>=3.0", "pyyaml>=6.0"]
+
+[project.optional-dependencies]
+test = ["pytest>=7.0"]
+
+[project.scripts]
+fabric-gen = "fabric_gen.__main__:main"
+
+[tool.setuptools]
+packages = ["fabric_gen"]
