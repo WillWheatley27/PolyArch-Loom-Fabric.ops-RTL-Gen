@@ -5,6 +5,7 @@ from .errors import (
     TemplateNotImplemented,
 )
 from .parser import ParsedOp, parse_op_string
+from .sharegroups import ShareGroup, validate
 
 __all__ = [
     "FabricGenError",
@@ -13,4 +14,6 @@ __all__ = [
     "TemplateNotImplemented",
     "ParsedOp",
     "parse_op_string",
+    "ShareGroup",
+    "validate",
 ]
