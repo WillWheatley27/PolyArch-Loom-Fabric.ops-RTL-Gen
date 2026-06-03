@@ -12,9 +12,10 @@ from .errors import TemplateNotImplemented
 _TEMPLATES = Path(__file__).resolve().parents[1] / "templates"
 _DEFAULT_REGISTRY = Path(__file__).resolve().parents[2] / "registry.yaml"
 
-# Group name -> template file. Only group 1 is wired for now.
+# Group name -> template file.
 _TEMPLATE_MAP = {
     "add_sub": "fu_add_sub.sv.j2",
+    "div_rem_signed": "fu_div_rem_signed.sv.j2",
 }
 
 _CARRY_TERM = "{{(WIDTH-1){1'b0}}, op_sel}"

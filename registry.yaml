@@ -13,7 +13,7 @@ groups:
     family: int_arith
     ops: [arith.divsi, arith.remsi]
     rtl_module: fu_div_rem_signed.sv
-    status: not_started
+    status: verified
     params: {width: 32}
 
   - id: 3

@@ -36,12 +36,44 @@ def test_generate_golden_matches_committed_rtl(tmp_path):
     assert out.read_text() == ref.read_text()
 
 
+def test_registry_lookup_div_rem_signed():
+    from fabric_gen.registry import load_registry, lookup_by_ops
+
+    reg = load_registry(ROOT / "registry.yaml")
+    grp = lookup_by_ops(["arith.divsi", "arith.remsi"], reg)
+    assert grp["name"] == "div_rem_signed"
+    assert grp["rtl_module"] == "fu_div_rem_signed.sv"
+    assert grp["params"]["width"] == 32
+
+
+def test_generate_group2_writes_file(tmp_path):
+    from fabric_gen.generator import generate
+
+    out = generate("fabric.op[@arith.divsi, @arith.remsi]", tmp_path,
+                   registry_path=ROOT / "registry.yaml")
+    assert out.name == "fu_div_rem_signed.sv"
+    text = out.read_text()
+    assert "module fu_div_rem_signed" in text
+    assert "input  logic              op_sel," in text
+    assert "out_data = op_sel ? rem_signed : quo_signed" in text
+
+
+def test_generate_group2_golden_matches_committed_rtl(tmp_path):
+    from fabric_gen.generator import generate
+
+    out = generate("fabric.op[@arith.divsi, @arith.remsi]", tmp_path,
+                   registry_path=ROOT / "registry.yaml")
+    ref = ROOT / "ops/int_arith/div_rem_signed/fu_div_rem_signed.sv"
+    assert out.read_text() == ref.read_text()
+
+
 def test_generate_unimplemented_group_raises(tmp_path):
     from fabric_gen.generator import generate
     from fabric_gen.errors import TemplateNotImplemented
 
+    # Group 3 (div_rem_unsigned) is a valid share group with no template yet.
     with pytest.raises(TemplateNotImplemented):
-        generate("fabric.op[@arith.divsi, @arith.remsi]", tmp_path,
+        generate("fabric.op[@arith.divui, @arith.remui]", tmp_path,
                  registry_path=ROOT / "registry.yaml")
 
 
