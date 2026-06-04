@@ -39,7 +39,8 @@ PYTHONPATH=generator ./.venv/bin/python -c \
 ```
 
 The parser and share-group validator are general (any op string, all 19 groups).
-RTL emission is currently implemented for **share group 1 (`add_sub`)** only;
+RTL emission is currently implemented for **share group 1 (`add_sub`)**,
+**share group 2 (`div_rem_signed`)**, and **share group 3 (`div_rem_unsigned`)**;
 other valid groups report `template not yet implemented`.
 
 ## Tests
