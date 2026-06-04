@@ -16,6 +16,7 @@ _DEFAULT_REGISTRY = Path(__file__).resolve().parents[2] / "registry.yaml"
 _TEMPLATE_MAP = {
     "add_sub": "fu_add_sub.sv.j2",
     "div_rem_signed": "fu_div_rem_signed.sv.j2",
+    "div_rem_unsigned": "fu_div_rem_unsigned.sv.j2",
 }
 
 _CARRY_TERM = "{{(WIDTH-1){1'b0}}, op_sel}"

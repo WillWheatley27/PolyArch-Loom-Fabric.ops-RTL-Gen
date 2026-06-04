@@ -21,7 +21,7 @@ groups:
     family: int_arith
     ops: [arith.divui, arith.remui]
     rtl_module: fu_div_rem_unsigned.sv
-    status: not_started
+    status: verified
     params: {width: 32}
 
   - id: 4
