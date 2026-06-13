@@ -222,13 +222,45 @@ def test_generate_group7_golden_matches_committed_rtl(tmp_path):
     assert out.read_text() == ref.read_text()
 
 
+def test_registry_lookup_int_to_fp():
+    from fabric_gen.registry import load_registry, lookup_by_ops
+
+    reg = load_registry(ROOT / "registry.yaml")
+    grp = lookup_by_ops(["arith.sitofp", "arith.uitofp"], reg)
+    assert grp["name"] == "int_to_fp"
+    assert grp["rtl_module"] == "fu_int_to_fp.sv"
+    assert grp["params"]["int_width"] == 32
+    assert grp["params"]["fp_width"] == 32
+
+
+def test_generate_group8_writes_file(tmp_path):
+    from fabric_gen.generator import generate
+
+    out = generate("fabric.op[@arith.sitofp, @arith.uitofp]", tmp_path,
+                   registry_path=ROOT / "registry.yaml")
+    assert out.name == "fu_int_to_fp.sv"
+    text = out.read_text()
+    assert "module fu_int_to_fp" in text
+    assert "parameter int unsigned INT_WIDTH = 32" in text
+    assert "round_up = guard & (sticky | lsb)" in text
+
+
+def test_generate_group8_golden_matches_committed_rtl(tmp_path):
+    from fabric_gen.generator import generate
+
+    out = generate("fabric.op[@arith.sitofp, @arith.uitofp]", tmp_path,
+                   registry_path=ROOT / "registry.yaml")
+    ref = ROOT / "ops/int_arith/int_to_fp/fu_int_to_fp.sv"
+    assert out.read_text() == ref.read_text()
+
+
 def test_generate_unimplemented_group_raises(tmp_path):
     from fabric_gen.generator import generate
     from fabric_gen.errors import TemplateNotImplemented
 
-    # Group 8 (int_to_fp) is a valid share group with no template yet.
+    # Group 9 (fp_to_int) is a valid share group with no template yet.
     with pytest.raises(TemplateNotImplemented):
-        generate("fabric.op[@arith.sitofp, @arith.uitofp]", tmp_path,
+        generate("fabric.op[@arith.fptosi, @arith.fptoui]", tmp_path,
                  registry_path=ROOT / "registry.yaml")
 
 

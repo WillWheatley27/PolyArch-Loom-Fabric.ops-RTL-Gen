@@ -61,7 +61,7 @@ groups:
     family: int_arith
     ops: [arith.sitofp, arith.uitofp]
     rtl_module: fu_int_to_fp.sv
-    status: not_started
+    status: verified
     params: {int_width: 32, fp_width: 32}
 
   - id: 9

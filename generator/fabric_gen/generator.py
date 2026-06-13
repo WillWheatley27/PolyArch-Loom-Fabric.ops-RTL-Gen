@@ -21,6 +21,7 @@ _TEMPLATE_MAP = {
     "bitwise_alu": "fu_bitwise_alu.sv.j2",
     "min_max_signed": "fu_min_max_signed.sv.j2",
     "min_max_unsigned": "fu_min_max_unsigned.sv.j2",
+    "int_to_fp": "fu_int_to_fp.sv.j2",
 }
 
 _CARRY_TERM = "{{(WIDTH-1){1'b0}}, op_sel}"
@@ -54,6 +55,7 @@ def generate(op_string, out_dir, width=None, registry_path=None):
         width=eff_width,
         op_list=parsed.op_list,
         carry_term=_CARRY_TERM,
+        params=grp.get("params", {}),
     )
 
     out_dir = Path(out_dir)
