@@ -45,7 +45,7 @@ groups:
     family: int_arith
     ops: [arith.minsi, arith.maxsi]
     rtl_module: fu_min_max_signed.sv
-    status: not_started
+    status: verified
     params: {width: 32}
 
   - id: 7
