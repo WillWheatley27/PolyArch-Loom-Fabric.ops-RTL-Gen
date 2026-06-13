@@ -53,7 +53,7 @@ groups:
     family: int_arith
     ops: [arith.minui, arith.maxui]
     rtl_module: fu_min_max_unsigned.sv
-    status: not_started
+    status: verified
     params: {width: 32}
 
   - id: 8

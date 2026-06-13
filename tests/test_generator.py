@@ -191,13 +191,44 @@ def test_generate_group6_golden_matches_committed_rtl(tmp_path):
     assert out.read_text() == ref.read_text()
 
 
+def test_registry_lookup_min_max_unsigned():
+    from fabric_gen.registry import load_registry, lookup_by_ops
+
+    reg = load_registry(ROOT / "registry.yaml")
+    grp = lookup_by_ops(["arith.minui", "arith.maxui"], reg)
+    assert grp["name"] == "min_max_unsigned"
+    assert grp["rtl_module"] == "fu_min_max_unsigned.sv"
+    assert grp["params"]["width"] == 32
+
+
+def test_generate_group7_writes_file(tmp_path):
+    from fabric_gen.generator import generate
+
+    out = generate("fabric.op[@arith.minui, @arith.maxui]", tmp_path,
+                   registry_path=ROOT / "registry.yaml")
+    assert out.name == "fu_min_max_unsigned.sv"
+    text = out.read_text()
+    assert "module fu_min_max_unsigned" in text
+    assert "input  logic              op_sel," in text
+    assert "a_lt_b   = in_data_0 < in_data_1;" in text
+
+
+def test_generate_group7_golden_matches_committed_rtl(tmp_path):
+    from fabric_gen.generator import generate
+
+    out = generate("fabric.op[@arith.minui, @arith.maxui]", tmp_path,
+                   registry_path=ROOT / "registry.yaml")
+    ref = ROOT / "ops/int_arith/min_max_unsigned/fu_min_max_unsigned.sv"
+    assert out.read_text() == ref.read_text()
+
+
 def test_generate_unimplemented_group_raises(tmp_path):
     from fabric_gen.generator import generate
     from fabric_gen.errors import TemplateNotImplemented
 
-    # Group 7 (min_max_unsigned) is a valid share group with no template yet.
+    # Group 8 (int_to_fp) is a valid share group with no template yet.
     with pytest.raises(TemplateNotImplemented):
-        generate("fabric.op[@arith.minui, @arith.maxui]", tmp_path,
+        generate("fabric.op[@arith.sitofp, @arith.uitofp]", tmp_path,
                  registry_path=ROOT / "registry.yaml")
 
 
