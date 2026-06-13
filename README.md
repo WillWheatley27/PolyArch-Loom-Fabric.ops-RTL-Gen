@@ -56,10 +56,19 @@ module load verilator/5.044
 ./tb/int_arith/add_sub/run.sh      # lint + sim at WIDTH 32 and 8
 ```
 
-## End-to-end demo
+## End-to-end demos
+
+One runnable demo per implemented share group lives in `demos/` (each:
+generate -> lint -> simulate at WIDTH 32 and 8 -> PASS -> "DEMO OK"). Run from
+anywhere; each script cd's to the repo root itself.
 
 ```bash
-./demo.sh        # generate -> lint -> simulate -> PASS -> "DEMO OK"
+./demos/demo.sh                  # group 1: add_sub
+./demos/demo_div_rem_signed.sh   # group 2: div_rem_signed
+./demos/demo_div_rem_unsigned.sh # group 3: div_rem_unsigned
+./demos/demo_barrel_shift.sh     # group 4: barrel_shift
+./demos/demo_bitwise_alu.sh      # group 5: bitwise_alu
+./demos/demo_min_max_signed.sh   # group 6: min_max_signed
 ```
 
 ## Verification gate

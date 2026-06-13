@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # End-to-end demo: generate group-1 RTL, lint it, simulate the TB, expect PASS.
 set -euo pipefail
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 
 OUT=build/demo
 rm -rf "$OUT"
