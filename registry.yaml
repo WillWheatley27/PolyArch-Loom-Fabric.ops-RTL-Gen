@@ -29,7 +29,7 @@ groups:
     family: int_arith
     ops: [arith.shli, arith.shrsi, arith.shrui]
     rtl_module: fu_barrel_shift.sv
-    status: not_started
+    status: verified
     params: {width: 32}
 
   - id: 5
