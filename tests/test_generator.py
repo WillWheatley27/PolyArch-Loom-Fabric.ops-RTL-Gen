@@ -129,13 +129,44 @@ def test_generate_group4_golden_matches_committed_rtl(tmp_path):
     assert out.read_text() == ref.read_text()
 
 
+def test_registry_lookup_bitwise_alu():
+    from fabric_gen.registry import load_registry, lookup_by_ops
+
+    reg = load_registry(ROOT / "registry.yaml")
+    grp = lookup_by_ops(["arith.andi", "arith.ori", "arith.xori"], reg)
+    assert grp["name"] == "bitwise_alu"
+    assert grp["rtl_module"] == "fu_bitwise_alu.sv"
+    assert grp["params"]["width"] == 32
+
+
+def test_generate_group5_writes_file(tmp_path):
+    from fabric_gen.generator import generate
+
+    out = generate("fabric.op[@arith.andi, @arith.ori, @arith.xori]", tmp_path,
+                   registry_path=ROOT / "registry.yaml")
+    assert out.name == "fu_bitwise_alu.sv"
+    text = out.read_text()
+    assert "module fu_bitwise_alu" in text
+    assert "input  logic [1:0]        op_sel," in text
+    assert "out_data = in_data_0 & in_data_1" in text
+
+
+def test_generate_group5_golden_matches_committed_rtl(tmp_path):
+    from fabric_gen.generator import generate
+
+    out = generate("fabric.op[@arith.andi, @arith.ori, @arith.xori]", tmp_path,
+                   registry_path=ROOT / "registry.yaml")
+    ref = ROOT / "ops/int_arith/bitwise_alu/fu_bitwise_alu.sv"
+    assert out.read_text() == ref.read_text()
+
+
 def test_generate_unimplemented_group_raises(tmp_path):
     from fabric_gen.generator import generate
     from fabric_gen.errors import TemplateNotImplemented
 
-    # Group 5 (bitwise_alu) is a valid share group with no template yet.
+    # Group 6 (min_max_signed) is a valid share group with no template yet.
     with pytest.raises(TemplateNotImplemented):
-        generate("fabric.op[@arith.andi, @arith.ori, @arith.xori]", tmp_path,
+        generate("fabric.op[@arith.minsi, @arith.maxsi]", tmp_path,
                  registry_path=ROOT / "registry.yaml")
 
 

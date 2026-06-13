@@ -37,7 +37,7 @@ groups:
     family: int_arith
     ops: [arith.andi, arith.ori, arith.xori]
     rtl_module: fu_bitwise_alu.sv
-    status: not_started
+    status: verified
     params: {width: 32}
 
   - id: 6

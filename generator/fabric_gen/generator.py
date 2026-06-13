@@ -18,6 +18,7 @@ _TEMPLATE_MAP = {
     "div_rem_signed": "fu_div_rem_signed.sv.j2",
     "div_rem_unsigned": "fu_div_rem_unsigned.sv.j2",
     "barrel_shift": "fu_barrel_shift.sv.j2",
+    "bitwise_alu": "fu_bitwise_alu.sv.j2",
 }
 
 _CARRY_TERM = "{{(WIDTH-1){1'b0}}, op_sel}"
