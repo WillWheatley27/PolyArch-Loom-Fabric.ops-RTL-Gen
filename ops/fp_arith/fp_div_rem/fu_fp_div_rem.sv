@@ -1,0 +1,230 @@
+// fu_fp_div_rem.sv -- Fabric FU for share group fp_div_rem.
+// op_list: arith.divf, arith.remf
+//   op_sel = 0 -> out = a / b        (arith.divf)
+//   op_sel = 1 -> out = fmod(a, b)   (arith.remf)  [a - b*trunc(a/b), sign of a]
+//
+// One shared restoring-division core; op_sel selects quotient (divf, RNE) vs
+// fmod residue (remf). op_sel held config. 2-input join, multi-cycle FSM
+// (variable latency). Structural (Verilator cannot run loom's shortreal model).
+// Subnormals FLUSHED TO ZERO (FTZ). NaN/Inf/signed-zero handled. binary32.
+//
+// remf is fmod (MLIR/LLVM frem), NOT IEEE remainder. fmod is exact (no rounding).
+
+module fu_fp_div_rem #(
+  parameter int unsigned WIDTH = 32
+) (
+  input  logic              clk,
+  input  logic              rst_n,
+
+  input  logic              op_sel,     // 0 = arith.divf, 1 = arith.remf (fmod)
+
+  input  logic [WIDTH-1:0]  in_data_0,  // operand A (dividend, binary32)
+  input  logic              in_valid_0,
+  output logic              in_ready_0,
+
+  input  logic [WIDTH-1:0]  in_data_1,  // operand B (divisor, binary32)
+  input  logic              in_valid_1,
+  output logic              in_ready_1,
+
+  output logic [WIDTH-1:0]  out_data,
+  output logic              out_valid,
+  input  logic              out_ready
+);
+
+  // Count leading zeros of a 24-bit value (0..23; x assumed nonzero).
+  function automatic logic [4:0] clz24(input logic [23:0] x);
+    logic [4:0] n; logic f; integer i;
+    begin : c
+      n = 5'd0; f = 1'b0;
+      for (i = 23; i >= 0; i = i - 1)
+        if (!f) begin if (x[i]) f = 1'b1; else n = n + 5'd1; end
+      clz24 = n;
+    end : c
+  endfunction
+
+  typedef enum logic [1:0] { ST_IDLE = 2'd0, ST_CALC = 2'd1, ST_DONE = 2'd2 } state_t;
+  state_t state_r, state_next;
+
+  // ---- unpack inputs (combinational) ----
+  logic        sa, sb;
+  logic [7:0]  ea, eb;
+  logic [22:0] ma, mb;
+  logic [23:0] sig_a, sig_b;
+  logic        a_nan, b_nan, a_inf, b_inf, a_zero, b_zero, a_lt_b;
+
+  always_comb begin : unpack
+    sa = in_data_0[31]; ea = in_data_0[30:23]; ma = in_data_0[22:0];
+    sb = in_data_1[31]; eb = in_data_1[30:23]; mb = in_data_1[22:0];
+    a_nan  = (ea == 8'hFF) & (|ma);
+    b_nan  = (eb == 8'hFF) & (|mb);
+    a_inf  = (ea == 8'hFF) & (~|ma);
+    b_inf  = (eb == 8'hFF) & (~|mb);
+    a_zero = (ea == 8'd0);                 // FTZ
+    b_zero = (eb == 8'd0);
+    sig_a  = {1'b1, ma};
+    sig_b  = {1'b1, mb};
+    a_lt_b = (ea < eb) | ((ea == eb) & (ma < mb));
+  end : unpack
+
+  // ---- captured state ----
+  logic         op_r, sign_r;
+  logic [7:0]   ea_r, eb_r;
+  logic [23:0]  sig_b_r;
+  // verilator lint_off UNUSEDSIGNAL
+  logic [24:0]  rem_r;        // partial remainder (< 2^24); bit24 transient
+  logic [27:0]  quo_r;        // divf quotient accumulator
+  // verilator lint_on UNUSEDSIGNAL
+  logic [7:0]   cnt_r;
+
+  // ---- one shift-subtract iteration (combinational, from rem_r/sig_b_r) ----
+  logic [24:0] rem_sh, rem_sub;
+  logic        ge;
+  always_comb begin : iter
+    rem_sh  = {rem_r[23:0], 1'b0};
+    ge      = (rem_sh >= {1'b0, sig_b_r});
+    rem_sub = ge ? (rem_sh - {1'b0, sig_b_r}) : rem_sh;
+  end : iter
+
+  // ---- final normalize/round (combinational, from captured regs) ----
+  // verilator lint_off UNUSEDSIGNAL
+  logic [27:0] normq;
+  // verilator lint_on UNUSEDSIGNAL
+  logic [22:0] mant_d, mant_fd, mant_rem;
+  logic        guard_d, rsticky_d, roundup_d;
+  logic [23:0] mant24_d;
+  logic signed [9:0] exp_unb_d, exp_b_d, exp_bf_d, exp_b_rem;
+  logic [4:0]  clz_r;
+  // verilator lint_off UNUSEDSIGNAL
+  logic [23:0] norm_rem;       // bit 23 is the implicit leading 1 (not read)
+  // verilator lint_on UNUSEDSIGNAL
+  logic [31:0] fin_result;
+
+  always_comb begin : finalize
+    // divf path
+    normq     = quo_r[27] ? quo_r : {quo_r[26:0], 1'b0};
+    mant_d    = normq[26:4];
+    guard_d   = normq[3];
+    rsticky_d = normq[2] | normq[1] | normq[0] | (rem_r != 25'd0);
+    roundup_d = guard_d & (rsticky_d | mant_d[0]);
+    mant24_d  = {1'b0, mant_d} + {23'd0, roundup_d};
+    exp_unb_d = $signed({2'b00, ea_r}) - $signed({2'b00, eb_r})
+                + (quo_r[27] ? 10'sd0 : -10'sd1);
+    exp_b_d   = exp_unb_d + 10'sd127;
+    if (mant24_d[23]) begin
+      mant_fd = 23'd0;       exp_bf_d = exp_b_d + 10'sd1;
+    end else begin
+      mant_fd = mant24_d[22:0]; exp_bf_d = exp_b_d;
+    end
+
+    // remf path
+    clz_r    = clz24(rem_r[23:0]);
+    norm_rem = rem_r[23:0] << clz_r;
+    mant_rem = norm_rem[22:0];
+    exp_b_rem = $signed({2'b00, eb_r}) - $signed({5'sd0, clz_r});
+
+    if (op_r == 1'b0) begin : fin_div
+      if (exp_bf_d >= 10'sd255)     fin_result = {sign_r, 8'hFF, 23'd0};   // Inf
+      else if (exp_bf_d <= 10'sd0)  fin_result = {sign_r, 8'd0,  23'd0};   // FTZ
+      else                          fin_result = {sign_r, exp_bf_d[7:0], mant_fd};
+    end : fin_div
+    else begin : fin_rem
+      if (rem_r == 25'd0)           fin_result = {sign_r, 31'd0};          // exact zero
+      else if (exp_b_rem <= 10'sd0) fin_result = {sign_r, 8'd0, 23'd0};    // FTZ underflow
+      else                          fin_result = {sign_r, exp_b_rem[7:0], mant_rem};
+    end : fin_rem
+  end : finalize
+
+  // ---- special-case result (combinational, from inputs) ----
+  logic [31:0] special_result;
+  logic        is_special;        // result decided without iterating
+  always_comb begin : special
+    is_special     = 1'b1;
+    special_result = 32'h7FC0_0000;          // default qNaN
+    if (op_sel == 1'b0) begin : sp_div
+      if      (a_nan | b_nan)      special_result = 32'h7FC0_0000;
+      else if (a_inf & b_inf)      special_result = 32'h7FC0_0000;          // Inf/Inf
+      else if (a_inf)              special_result = {sa ^ sb, 8'hFF, 23'd0}; // Inf/x
+      else if (b_inf)              special_result = {sa ^ sb, 31'd0};        // x/Inf=0
+      else if (b_zero & a_zero)    special_result = 32'h7FC0_0000;          // 0/0
+      else if (b_zero)             special_result = {sa ^ sb, 8'hFF, 23'd0}; // x/0=Inf
+      else if (a_zero)             special_result = {sa ^ sb, 31'd0};        // 0/x=0
+      else                         is_special = 1'b0;
+    end : sp_div
+    else begin : sp_rem
+      if      (a_nan | b_nan)      special_result = 32'h7FC0_0000;
+      else if (b_zero)             special_result = 32'h7FC0_0000;          // fmod(x,0)
+      else if (a_inf)              special_result = 32'h7FC0_0000;          // fmod(Inf,y)
+      else if (b_inf)              special_result = {sa, ea, ma};           // fmod(x,Inf)=x
+      else if (a_zero)             special_result = {sa, 31'd0};            // fmod(0,b)=0
+      else if (a_lt_b)             special_result = {sa, ea, ma};           // |a|<|b| -> a
+      else                         is_special = 1'b0;
+    end : sp_rem
+  end : special
+
+  // ---- handshake ----
+  logic accept;
+  assign accept     = (state_r == ST_IDLE) & in_valid_0 & in_valid_1;
+  assign in_ready_0 = accept;
+  assign in_ready_1 = accept;
+
+  // ---- FSM next-state ----
+  always_comb begin : nsl
+    state_next = state_r;
+    case (state_r)
+      ST_IDLE:  if (accept)        state_next = is_special ? ST_DONE : ST_CALC;
+      ST_CALC:  if (cnt_r == 8'd0) state_next = ST_DONE;
+      ST_DONE:  if (out_ready)     state_next = ST_IDLE;
+      default:                     state_next = ST_IDLE;
+    endcase
+  end : nsl
+
+  always_ff @(posedge clk) begin : seq
+    if (!rst_n) begin : rst
+      state_r <= ST_IDLE; out_valid <= 1'b0; out_data <= {WIDTH{1'b0}};
+      op_r <= 1'b0; sign_r <= 1'b0; ea_r <= 8'd0; eb_r <= 8'd0;
+      sig_b_r <= 24'd0; rem_r <= 25'd0; quo_r <= 28'd0; cnt_r <= 8'd0;
+    end : rst
+    else begin : run
+      state_r <= state_next;
+      case (state_r)
+        ST_IDLE: if (accept) begin : acc
+          op_r    <= op_sel;
+          ea_r    <= ea; eb_r <= eb; sig_b_r <= sig_b;
+          if (is_special) begin : sp
+            out_data <= special_result; out_valid <= 1'b1;
+          end : sp
+          else if (op_sel == 1'b0) begin : setup_div
+            sign_r <= sa ^ sb;
+            // initial reduce so the partial remainder starts < divisor; the
+            // integer quotient bit (ratio >= 1) seeds quo bit 0.
+            if (sig_a >= sig_b) begin : ge1
+              rem_r <= {1'b0, (sig_a - sig_b)}; quo_r <= 28'd1;
+            end : ge1
+            else begin : lt1
+              rem_r <= {1'b0, sig_a};           quo_r <= 28'd0;
+            end : lt1
+            cnt_r <= 8'd27;
+          end : setup_div
+          else begin : setup_rem
+            sign_r <= sa;
+            rem_r  <= (sig_a >= sig_b) ? {1'b0, (sig_a - sig_b)} : {1'b0, sig_a};
+            cnt_r  <= ea - eb;
+          end : setup_rem
+        end : acc
+        ST_CALC: begin : calc
+          if (cnt_r == 8'd0) begin : finish
+            out_data <= fin_result; out_valid <= 1'b1;
+          end : finish
+          else begin : step
+            rem_r <= rem_sub;
+            quo_r <= {quo_r[26:0], ge};        // only meaningful for divf
+            cnt_r <= cnt_r - 8'd1;
+          end : step
+        end : calc
+        ST_DONE: if (out_ready) out_valid <= 1'b0;
+        default: ;
+      endcase
+    end : run
+  end : seq
+
+endmodule : fu_fp_div_rem

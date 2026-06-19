@@ -86,7 +86,7 @@ groups:
     family: fp_arith
     ops: [arith.divf, arith.remf]
     rtl_module: fu_fp_div_rem.sv
-    status: not_started
+    status: verified
     params: {width: 32}
 
   - id: 12
@@ -94,7 +94,7 @@ groups:
     family: fp_arith
     ops: [arith.minimumf, arith.maximumf]
     rtl_module: fu_fp_min_max.sv
-    status: not_started
+    status: verified
     params: {width: 32}
 
   # --- Math / Transcendentals ---

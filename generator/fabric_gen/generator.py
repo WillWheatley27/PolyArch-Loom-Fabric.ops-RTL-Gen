@@ -24,6 +24,8 @@ _TEMPLATE_MAP = {
     "int_to_fp": "fu_int_to_fp.sv.j2",
     "fp_to_int": "fu_fp_to_int.sv.j2",
     "fp_add_sub": "fu_fp_add_sub.sv.j2",
+    "fp_div_rem": "fu_fp_div_rem.sv.j2",
+    "fp_min_max": "fu_fp_min_max.sv.j2",
 }
 
 _CARRY_TERM = "{{(WIDTH-1){1'b0}}, op_sel}"

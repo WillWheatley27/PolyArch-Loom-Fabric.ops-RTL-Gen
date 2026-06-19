@@ -316,13 +316,73 @@ def test_generate_group10_golden_matches_committed_rtl(tmp_path):
     assert out.read_text() == ref.read_text()
 
 
+def test_registry_lookup_fp_div_rem():
+    from fabric_gen.registry import load_registry, lookup_by_ops
+
+    reg = load_registry(ROOT / "registry.yaml")
+    grp = lookup_by_ops(["arith.divf", "arith.remf"], reg)
+    assert grp["name"] == "fp_div_rem"
+    assert grp["rtl_module"] == "fu_fp_div_rem.sv"
+    assert grp["params"]["width"] == 32
+
+
+def test_generate_group11_writes_file(tmp_path):
+    from fabric_gen.generator import generate
+
+    out = generate("fabric.op[@arith.divf, @arith.remf]", tmp_path,
+                   registry_path=ROOT / "registry.yaml")
+    assert out.name == "fu_fp_div_rem.sv"
+    text = out.read_text()
+    assert "module fu_fp_div_rem" in text
+    assert "rem_sub = ge ? (rem_sh - {1'b0, sig_b_r}) : rem_sh;" in text
+
+
+def test_generate_group11_golden_matches_committed_rtl(tmp_path):
+    from fabric_gen.generator import generate
+
+    out = generate("fabric.op[@arith.divf, @arith.remf]", tmp_path,
+                   registry_path=ROOT / "registry.yaml")
+    ref = ROOT / "ops/fp_arith/fp_div_rem/fu_fp_div_rem.sv"
+    assert out.read_text() == ref.read_text()
+
+
+def test_registry_lookup_fp_min_max():
+    from fabric_gen.registry import load_registry, lookup_by_ops
+
+    reg = load_registry(ROOT / "registry.yaml")
+    grp = lookup_by_ops(["arith.minimumf", "arith.maximumf"], reg)
+    assert grp["name"] == "fp_min_max"
+    assert grp["rtl_module"] == "fu_fp_min_max.sv"
+    assert grp["params"]["width"] == 32
+
+
+def test_generate_group12_writes_file(tmp_path):
+    from fabric_gen.generator import generate
+
+    out = generate("fabric.op[@arith.minimumf, @arith.maximumf]", tmp_path,
+                   registry_path=ROOT / "registry.yaml")
+    assert out.name == "fu_fp_min_max.sv"
+    text = out.read_text()
+    assert "module fu_fp_min_max" in text
+    assert "a_lt_b = key_a < key_b;" in text
+
+
+def test_generate_group12_golden_matches_committed_rtl(tmp_path):
+    from fabric_gen.generator import generate
+
+    out = generate("fabric.op[@arith.minimumf, @arith.maximumf]", tmp_path,
+                   registry_path=ROOT / "registry.yaml")
+    ref = ROOT / "ops/fp_arith/fp_min_max/fu_fp_min_max.sv"
+    assert out.read_text() == ref.read_text()
+
+
 def test_generate_unimplemented_group_raises(tmp_path):
     from fabric_gen.generator import generate
     from fabric_gen.errors import TemplateNotImplemented
 
-    # Group 11 (fp_div_rem) is a valid share group with no template yet.
+    # Group 13 (cordic_trig) is a valid share group with no template yet.
     with pytest.raises(TemplateNotImplemented):
-        generate("fabric.op[@arith.divf, @arith.remf]", tmp_path,
+        generate("fabric.op[@math.sin, @math.cos]", tmp_path,
                  registry_path=ROOT / "registry.yaml")
 
 
