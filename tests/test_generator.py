@@ -286,13 +286,43 @@ def test_generate_group9_golden_matches_committed_rtl(tmp_path):
     assert out.read_text() == ref.read_text()
 
 
+def test_registry_lookup_fp_add_sub():
+    from fabric_gen.registry import load_registry, lookup_by_ops
+
+    reg = load_registry(ROOT / "registry.yaml")
+    grp = lookup_by_ops(["arith.addf", "arith.subf"], reg)
+    assert grp["name"] == "fp_add_sub"
+    assert grp["rtl_module"] == "fu_fp_add_sub.sv"
+    assert grp["params"]["width"] == 32
+
+
+def test_generate_group10_writes_file(tmp_path):
+    from fabric_gen.generator import generate
+
+    out = generate("fabric.op[@arith.addf, @arith.subf]", tmp_path,
+                   registry_path=ROOT / "registry.yaml")
+    assert out.name == "fu_fp_add_sub.sv"
+    text = out.read_text()
+    assert "module fu_fp_add_sub" in text
+    assert "round_up = guard & (sticky | mant23[0])" in text
+
+
+def test_generate_group10_golden_matches_committed_rtl(tmp_path):
+    from fabric_gen.generator import generate
+
+    out = generate("fabric.op[@arith.addf, @arith.subf]", tmp_path,
+                   registry_path=ROOT / "registry.yaml")
+    ref = ROOT / "ops/fp_arith/fp_add_sub/fu_fp_add_sub.sv"
+    assert out.read_text() == ref.read_text()
+
+
 def test_generate_unimplemented_group_raises(tmp_path):
     from fabric_gen.generator import generate
     from fabric_gen.errors import TemplateNotImplemented
 
-    # Group 10 (fp_add_sub) is a valid share group with no template yet.
+    # Group 11 (fp_div_rem) is a valid share group with no template yet.
     with pytest.raises(TemplateNotImplemented):
-        generate("fabric.op[@arith.addf, @arith.subf]", tmp_path,
+        generate("fabric.op[@arith.divf, @arith.remf]", tmp_path,
                  registry_path=ROOT / "registry.yaml")
 
 

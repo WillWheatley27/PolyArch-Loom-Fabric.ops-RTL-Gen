@@ -78,7 +78,7 @@ groups:
     family: fp_arith
     ops: [arith.addf, arith.subf]
     rtl_module: fu_fp_add_sub.sv
-    status: not_started
+    status: verified
     params: {width: 32}
 
   - id: 11

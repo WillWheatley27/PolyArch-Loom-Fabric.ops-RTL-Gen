@@ -1,0 +1,205 @@
+// fu_fp_add_sub.sv -- Fabric FU for share group fp_add_sub.
+// op_list: arith.addf, arith.subf
+//   op_sel = 0 -> out = a + b   (arith.addf)
+//   op_sel = 1 -> out = a - b   (arith.subf)  [add with operand B sign flipped]
+//
+// One shared IEEE-754 binary32 adder; op_sel only flips operand B's sign.
+// op_sel is a held config input. 2-input join, intrinsic latency 1.
+//
+// Structural (Verilator cannot simulate loom's behavioral $bitstoshortreal
+// model). Round-to-nearest-even. Subnormals are FLUSHED TO ZERO (FTZ): subnormal
+// inputs are treated as signed zero, subnormal results underflow to signed zero.
+// Normal range is full IEEE-754. NaN/Inf/signed-zero handled.
+//
+// NOTE: targets WIDTH = 32 (binary32): 1 sign + 8 exp (bias 127) + 23 mantissa.
+
+module fu_fp_add_sub #(
+  parameter int unsigned WIDTH = 32
+) (
+  input  logic              clk,
+  input  logic              rst_n,
+
+  input  logic              op_sel,     // 0 = arith.addf, 1 = arith.subf (B sign flipped)
+
+  input  logic [WIDTH-1:0]  in_data_0,  // operand A (binary32)
+  input  logic              in_valid_0,
+  output logic              in_ready_0,
+
+  input  logic [WIDTH-1:0]  in_data_1,  // operand B (binary32)
+  input  logic              in_valid_1,
+  output logic              in_ready_1,
+
+  output logic [WIDTH-1:0]  out_data,
+  output logic              out_valid,
+  input  logic              out_ready
+);
+
+  // Leading-zero count within bits [26:0] (returns 0..26; x assumed nonzero).
+  function automatic logic [4:0] lzc27(input logic [26:0] x);
+    logic [4:0] n;
+    logic       found;
+    integer     i;
+    begin : lzc_body
+      n = 5'd0; found = 1'b0;
+      for (i = 26; i >= 0; i = i - 1) begin : lzc_loop
+        if (!found) begin : lzc_step
+          if (x[i]) found = 1'b1;
+          else      n = n + 5'd1;
+        end : lzc_step
+      end : lzc_loop
+      lzc27 = n;
+    end : lzc_body
+  endfunction
+
+  // ---- unpack (operand B sign flipped for subf) ----
+  logic        sa, sb;
+  logic [7:0]  ea, eb;
+  logic [22:0] ma, mb;
+  logic        a_nan, b_nan, a_inf, b_inf, a_zero, b_zero;
+  logic [23:0] sig_a, sig_b;
+
+  // ---- both-normal datapath signals ----
+  logic        big_sign, small_sign, add_op;
+  logic [7:0]  big_exp;
+  logic [23:0] big_sig, small_sig;
+  logic [7:0]  diff;
+  // verilator lint_off UNUSEDSIGNAL
+  logic [27:0] big_m, small_m, small_aligned, raw;  // bit 27 = add carry / unused in sub
+  logic [26:0] norm;                                // bit 26 = implicit leading 1 (not read)
+  // verilator lint_on UNUSEDSIGNAL
+  logic        sticky_shift, sticky;
+  logic [4:0]  nsh;
+  logic [22:0] mant23, mant_final;
+  logic        guard, round_up;
+  logic [23:0] mant_r;
+  logic signed [9:0] exp_s, exp_s2;
+  logic [31:0] result;
+
+  always_comb begin : fadd
+    sa = in_data_0[31]; ea = in_data_0[30:23]; ma = in_data_0[22:0];
+    sb = op_sel ? ~in_data_1[31] : in_data_1[31];
+    eb = in_data_1[30:23]; mb = in_data_1[22:0];
+
+    a_nan  = (ea == 8'hFF) & (|ma);
+    b_nan  = (eb == 8'hFF) & (|mb);
+    a_inf  = (ea == 8'hFF) & (~|ma);
+    b_inf  = (eb == 8'hFF) & (~|mb);
+    a_zero = (ea == 8'd0);                 // FTZ: subnormal or zero -> zero
+    b_zero = (eb == 8'd0);
+    sig_a  = {1'b1, ma};
+    sig_b  = {1'b1, mb};
+
+    // defaults (avoid latches)
+    big_sign = 1'b0; small_sign = 1'b0; add_op = 1'b0;
+    big_exp = 8'd0; big_sig = 24'd0; small_sig = 24'd0; diff = 8'd0;
+    big_m = 28'd0; small_m = 28'd0; small_aligned = 28'd0; raw = 28'd0;
+    norm = 27'd0; sticky_shift = 1'b0; sticky = 1'b0; nsh = 5'd0;
+    mant23 = 23'd0; mant_final = 23'd0; guard = 1'b0; round_up = 1'b0;
+    mant_r = 24'd0; exp_s = 10'sd0; exp_s2 = 10'sd0;
+    result = 32'h0000_0000;
+
+    if (a_nan | b_nan) begin : nan_case
+      result = 32'h7FC0_0000;                                   // qNaN
+    end : nan_case
+    else if (a_inf & b_inf) begin : inf_inf
+      result = (sa == sb) ? {sa, 8'hFF, 23'd0} : 32'h7FC0_0000; // Inf+Inf / Inf-Inf
+    end : inf_inf
+    else if (a_inf) result = {sa, 8'hFF, 23'd0};
+    else if (b_inf) result = {sb, 8'hFF, 23'd0};
+    else if (a_zero & b_zero) result = {sa & sb, 31'd0};        // +0 unless both -0
+    else if (a_zero) result = {sb, eb, mb};                     // other operand (normal)
+    else if (b_zero) result = {sa, ea, ma};
+    else begin : both_normal
+      // larger magnitude operand -> big
+      if ((ea > eb) | ((ea == eb) & (ma >= mb))) begin : a_big
+        big_sign = sa; big_exp = ea; big_sig = sig_a;
+        small_sign = sb; small_sig = sig_b; diff = ea - eb;
+      end : a_big
+      else begin : b_big
+        big_sign = sb; big_exp = eb; big_sig = sig_b;
+        small_sign = sa; small_sig = sig_a; diff = eb - ea;
+      end : b_big
+      add_op = (big_sign == small_sign);
+
+      big_m   = {1'b0, big_sig,   3'b000};
+      small_m = {1'b0, small_sig, 3'b000};
+      if (diff >= 8'd28) begin : far
+        small_aligned = 28'd0;
+        sticky_shift  = |small_sig;
+      end : far
+      else begin : near
+        small_aligned = small_m >> diff[4:0];
+        sticky_shift  = |(small_m & ((28'd1 << diff[4:0]) - 28'd1));
+      end : near
+      // Fold the far-sticky into the operand LSB BEFORE the op, so an effective
+      // subtraction borrows from it correctly (sticky compression).
+      small_aligned[0] = small_aligned[0] | sticky_shift;
+
+      raw = add_op ? (big_m + small_aligned) : (big_m - small_aligned);
+
+      if (!add_op & (raw == 28'd0)) begin : cancel_zero
+        result = 32'h0000_0000;                                 // exact cancellation -> +0
+      end : cancel_zero
+      else begin : compute
+        if (add_op & raw[27]) begin : add_carry
+          norm   = raw[27:1];
+          exp_s  = $signed({2'b00, big_exp}) + 10'sd1;
+          sticky = raw[0];                      // bit shifted out by the >>1
+        end : add_carry
+        else if (add_op) begin : add_nocarry
+          norm   = raw[26:0];
+          exp_s  = $signed({2'b00, big_exp});
+          sticky = 1'b0;                        // far-sticky already folded into raw
+        end : add_nocarry
+        else begin : sub_norm
+          nsh    = lzc27(raw[26:0]);
+          norm   = raw[26:0] << nsh;
+          exp_s  = $signed({2'b00, big_exp}) - $signed({5'd0, nsh});
+          sticky = 1'b0;                        // far-sticky folded; cancellation is exact
+        end : sub_norm
+
+        // round to nearest even
+        mant23   = norm[25:3];
+        guard    = norm[2];
+        sticky   = sticky | norm[1] | norm[0];
+        round_up = guard & (sticky | mant23[0]);
+        mant_r   = {1'b0, mant23} + {23'd0, round_up};
+        if (mant_r[23]) begin : round_ovf
+          mant_final = 23'd0;
+          exp_s2     = exp_s + 10'sd1;
+        end : round_ovf
+        else begin : round_ok
+          mant_final = mant_r[22:0];
+          exp_s2     = exp_s;
+        end : round_ok
+
+        if (exp_s2 >= 10'sd255)     result = {big_sign, 8'hFF, 23'd0};  // overflow -> Inf
+        else if (exp_s2 <= 10'sd0)  result = {big_sign, 8'd0,  23'd0};  // underflow -> FTZ signed 0
+        else                        result = {big_sign, exp_s2[7:0], mant_final};
+      end : compute
+    end : both_normal
+  end : fadd
+
+  // ---- latency-1 handshake (2-input join) ----
+  logic fire;
+  assign fire       = in_valid_0 & in_valid_1 & (~out_valid | out_ready);
+  assign in_ready_0 = fire;
+  assign in_ready_1 = fire;
+
+  always_ff @(posedge clk) begin : pipe_reg
+    if (!rst_n) begin : pipe_rst
+      out_valid <= 1'b0;
+      out_data  <= {WIDTH{1'b0}};
+    end : pipe_rst
+    else begin : pipe_upd
+      if (fire) begin : pipe_fire
+        out_data  <= result;
+        out_valid <= 1'b1;
+      end : pipe_fire
+      else if (out_ready) begin : pipe_drain
+        out_valid <= 1'b0;
+      end : pipe_drain
+    end : pipe_upd
+  end : pipe_reg
+
+endmodule : fu_fp_add_sub
