@@ -69,7 +69,7 @@ groups:
     family: int_arith
     ops: [arith.fptosi, arith.fptoui]
     rtl_module: fu_fp_to_int.sv
-    status: not_started
+    status: verified
     params: {fp_width: 32, int_width: 32}
 
   # --- Floating-Point Arithmetic ---

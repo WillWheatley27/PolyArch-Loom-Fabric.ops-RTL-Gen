@@ -22,6 +22,7 @@ _TEMPLATE_MAP = {
     "min_max_signed": "fu_min_max_signed.sv.j2",
     "min_max_unsigned": "fu_min_max_unsigned.sv.j2",
     "int_to_fp": "fu_int_to_fp.sv.j2",
+    "fp_to_int": "fu_fp_to_int.sv.j2",
 }
 
 _CARRY_TERM = "{{(WIDTH-1){1'b0}}, op_sel}"
