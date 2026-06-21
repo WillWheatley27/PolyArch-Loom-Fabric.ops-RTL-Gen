@@ -103,7 +103,7 @@ groups:
     family: math
     ops: [math.sin, math.cos]
     rtl_module: fu_cordic_trig.sv
-    status: not_started
+    status: verified
     params: {width: 32, iterations: 16}
 
   - id: 14

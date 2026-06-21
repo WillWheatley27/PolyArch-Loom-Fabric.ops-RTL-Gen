@@ -1,0 +1,144 @@
+// fu_cordic_trig.sv -- Fabric FU for share group cordic_trig.
+// op_list: math.sin, math.cos
+//   op_sel = 0 -> out = sin(x)   (math.sin)
+//   op_sel = 1 -> out = cos(x)   (math.cos)
+//
+// One shared CORDIC rotator: X output = cos, Y output = sin (from one iteration).
+// op_sel taps which. Unary op. Intrinsic latency 1 (registered output).
+//
+// APPROXIMATE (~16-bit), NOT bit-exact. No loom reference
+// (loom rejects transcendentals without an FP IP profile). binary32 I/O with a
+// fixed-point Q4.28 CORDIC core (16 iterations). Input is
+// folded to [-pi/2, pi/2]; ASSUMES |x| <= pi (no full mod-2pi reduction --
+// larger |x| is out of scope). Subnormals flushed to zero.
+
+module fu_cordic_trig #(
+  parameter int unsigned WIDTH = 32
+) (
+  input  logic              clk,
+  input  logic              rst_n,
+
+  input  logic              op_sel,     // 0 = math.sin (sin), 1 = math.cos (cos)
+
+  input  logic [WIDTH-1:0]  in_data_0,  // angle x in radians (binary32)
+  input  logic              in_valid_0,
+  output logic              in_ready_0,
+
+  output logic [WIDTH-1:0]  out_data,   // sin(x) or cos(x), binary32
+  output logic              out_valid,
+  input  logic              out_ready
+);
+
+  // ---- Q4.28 constants (value * 2^28) ----
+  localparam logic signed [31:0] CK     = 32'sd163008219;   // CORDIC gain ~0.60725
+  localparam logic signed [31:0] CPI    = 32'sd843314857;   // pi
+  localparam logic signed [31:0] CHALFPI= 32'sd421657428;   // pi/2
+  localparam logic signed [31:0] ATAN [0:15] = '{
+    32'sd210828714, 32'sd124459457, 32'sd65760959, 32'sd33381290,
+    32'sd16755422,  32'sd8385879,   32'sd4193963,  32'sd2097109,
+    32'sd1048571,   32'sd524287,    32'sd262144,   32'sd131072,
+    32'sd65536,     32'sd32768,     32'sd16384,    32'sd8192 };
+
+  function automatic logic [4:0] clz32(input logic [31:0] x);
+    logic [4:0] n; logic f; integer i;
+    begin n = 5'd0; f = 1'b0;
+      for (i = 31; i >= 0; i = i - 1) if (!f) begin if (x[i]) f = 1'b1; else n = n + 5'd1; end
+      clz32 = n;
+    end
+  endfunction
+
+  // ---- combinational datapath ----
+  logic        s_in;
+  logic [7:0]  e_in;
+  logic [22:0] m_in;
+  logic [23:0] sig_in;
+  logic signed [9:0]  shamt;
+  // verilator lint_off UNUSEDSIGNAL
+  logic [31:0]        mag_fx;
+  logic signed [31:0] ang_fx, ang_red;
+  logic               neg_both;
+  logic signed [31:0] cx [0:16];
+  logic signed [31:0] cy [0:16];
+  logic signed [31:0] cz [0:16];   // cz[16] unused (residual angle)
+  logic signed [31:0] cos_fx, sin_fx, res_fx;
+  logic [31:0]        rmag, norm_e; // norm_e[31] is the implicit leading 1
+  logic [4:0]         clz_e;
+  logic [22:0]        mant_e;
+  logic               guard_e, sticky_e, roundup_e;
+  logic [23:0]        mant24_e;
+  logic signed [9:0]  exp_be;
+  // verilator lint_on UNUSEDSIGNAL
+  logic        rsign;
+  logic [22:0] mant_fe;
+  logic [31:0] conv_result;
+  integer      ii;
+
+  always_comb begin : datapath
+    // -- decode binary32 -> Q4.28 (FTZ) --
+    s_in = in_data_0[31]; e_in = in_data_0[30:23]; m_in = in_data_0[22:0];
+    sig_in = {1'b1, m_in};
+    shamt = $signed({2'b00, e_in}) - 10'sd122;
+    if (e_in == 8'd0)          mag_fx = 32'd0;
+    else if (shamt >= 10'sd0)  mag_fx = {8'd0, sig_in} << shamt[4:0];
+    else                       mag_fx = {8'd0, sig_in} >> (-shamt);
+    ang_fx = s_in ? -$signed(mag_fx) : $signed(mag_fx);
+
+    // -- quadrant fold to [-pi/2, pi/2] (assumes |x| <= pi) --
+    if (ang_fx > CHALFPI)       begin ang_red = ang_fx - CPI; neg_both = 1'b1; end
+    else if (ang_fx < -CHALFPI) begin ang_red = ang_fx + CPI; neg_both = 1'b1; end
+    else                        begin ang_red = ang_fx;       neg_both = 1'b0; end
+
+    // -- CORDIC circular rotation (16 iterations, unrolled) --
+    cx[0] = CK; cy[0] = 32'sd0; cz[0] = ang_red;
+    for (ii = 0; ii < 16; ii = ii + 1) begin : cordic
+      if (!cz[ii][31]) begin : zpos       // z >= 0, rotate +
+        cx[ii+1] = cx[ii] - (cy[ii] >>> ii[4:0]);
+        cy[ii+1] = cy[ii] + (cx[ii] >>> ii[4:0]);
+        cz[ii+1] = cz[ii] - ATAN[ii];
+      end : zpos
+      else begin : zneg                    // z < 0, rotate -
+        cx[ii+1] = cx[ii] + (cy[ii] >>> ii[4:0]);
+        cy[ii+1] = cy[ii] - (cx[ii] >>> ii[4:0]);
+        cz[ii+1] = cz[ii] + ATAN[ii];
+      end : zneg
+    end : cordic
+
+    // -- quadrant correct + select --
+    cos_fx = neg_both ? -cx[16] : cx[16];
+    sin_fx = neg_both ? -cy[16] : cy[16];
+    res_fx = op_sel ? cos_fx : sin_fx;
+
+    // -- encode Q4.28 -> binary32 (value = res_fx * 2^-28), RNE --
+    rsign = res_fx[31];
+    rmag  = rsign ? (~res_fx + 32'd1) : res_fx;
+    clz_e = clz32(rmag);
+    norm_e = rmag << clz_e;                 // leading 1 at bit 31
+    mant_e = norm_e[30:8];
+    guard_e = norm_e[7];
+    sticky_e = |norm_e[6:0];
+    roundup_e = guard_e & (sticky_e | mant_e[0]);
+    mant24_e = {1'b0, mant_e} + {23'd0, roundup_e};
+    exp_be = 10'sd130 - $signed({5'd0, clz_e});
+    if (mant24_e[23]) begin mant_fe = 23'd0;          exp_be = exp_be + 10'sd1; end
+    else              begin mant_fe = mant24_e[22:0];                            end
+
+    if (rmag == 32'd0)            conv_result = {rsign, 31'd0};        // exact zero
+    else if (exp_be <= 10'sd0)    conv_result = {rsign, 8'd0, 23'd0};  // FTZ underflow
+    else                          conv_result = {rsign, exp_be[7:0], mant_fe};
+  end : datapath
+
+  // ---- latency-1 handshake (unary) ----
+  logic fire;
+  assign fire       = in_valid_0 & (~out_valid | out_ready);
+  assign in_ready_0 = fire;
+
+  always_ff @(posedge clk) begin : pipe
+    if (!rst_n) begin
+      out_valid <= 1'b0; out_data <= {WIDTH{1'b0}};
+    end else begin
+      if (fire)            begin out_data <= conv_result; out_valid <= 1'b1; end
+      else if (out_ready)  out_valid <= 1'b0;
+    end
+  end : pipe
+
+endmodule : fu_cordic_trig
