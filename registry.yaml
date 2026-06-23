@@ -151,5 +151,5 @@ groups:
     family: math
     ops: [math.tanh, math.erf]
     rtl_module: fu_approx_tanh_erf.sv
-    status: not_started
+    status: verified
     params: {width: 32}

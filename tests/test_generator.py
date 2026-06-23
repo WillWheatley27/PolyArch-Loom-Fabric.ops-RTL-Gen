@@ -436,6 +436,37 @@ def test_generate_group14_golden_matches_committed_rtl(tmp_path):
     assert out.read_text() == ref.read_text()
 
 
+def test_registry_lookup_approx_tanh_erf():
+    from fabric_gen.registry import load_registry, lookup_by_ops
+
+    reg = load_registry(ROOT / "registry.yaml")
+    grp = lookup_by_ops(["math.tanh", "math.erf"], reg)
+    assert grp["name"] == "approx_tanh_erf"
+    assert grp["rtl_module"] == "fu_approx_tanh_erf.sv"
+    assert grp["params"]["width"] == 32
+
+
+def test_generate_group19_writes_file(tmp_path):
+    from fabric_gen.generator import generate
+
+    out = generate("fabric.op[@math.tanh, @math.erf]", tmp_path,
+                   registry_path=ROOT / "registry.yaml")
+    assert out.name == "fu_approx_tanh_erf.sv"
+    text = out.read_text()
+    assert "module fu_approx_tanh_erf" in text
+    assert "localparam logic [23:0] TANH_T [0:128]" in text
+    assert "localparam logic [23:0] ERF_T [0:128]" in text
+
+
+def test_generate_group19_golden_matches_committed_rtl(tmp_path):
+    from fabric_gen.generator import generate
+
+    out = generate("fabric.op[@math.tanh, @math.erf]", tmp_path,
+                   registry_path=ROOT / "registry.yaml")
+    ref = ROOT / "ops/math/approx_tanh_erf/fu_approx_tanh_erf.sv"
+    assert out.read_text() == ref.read_text()
+
+
 def test_generate_unimplemented_group_raises(tmp_path):
     from fabric_gen.generator import generate
     from fabric_gen.errors import TemplateNotImplemented
