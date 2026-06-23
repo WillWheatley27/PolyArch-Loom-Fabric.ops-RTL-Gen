@@ -406,13 +406,43 @@ def test_generate_group13_golden_matches_committed_rtl(tmp_path):
     assert out.read_text() == ref.read_text()
 
 
+def test_registry_lookup_cordic_hyp():
+    from fabric_gen.registry import load_registry, lookup_by_ops
+
+    reg = load_registry(ROOT / "registry.yaml")
+    grp = lookup_by_ops(["math.sinh", "math.cosh"], reg)
+    assert grp["name"] == "cordic_hyp"
+    assert grp["rtl_module"] == "fu_cordic_hyp.sv"
+    assert grp["params"]["iterations"] == 16
+
+
+def test_generate_group14_writes_file(tmp_path):
+    from fabric_gen.generator import generate
+
+    out = generate("fabric.op[@math.sinh, @math.cosh]", tmp_path,
+                   registry_path=ROOT / "registry.yaml")
+    assert out.name == "fu_cordic_hyp.sv"
+    text = out.read_text()
+    assert "module fu_cordic_hyp" in text
+    assert "32'sd324135026" in text   # x0 = 1/A_h (Q4.28)
+
+
+def test_generate_group14_golden_matches_committed_rtl(tmp_path):
+    from fabric_gen.generator import generate
+
+    out = generate("fabric.op[@math.sinh, @math.cosh]", tmp_path,
+                   registry_path=ROOT / "registry.yaml")
+    ref = ROOT / "ops/math/cordic_hyp/fu_cordic_hyp.sv"
+    assert out.read_text() == ref.read_text()
+
+
 def test_generate_unimplemented_group_raises(tmp_path):
     from fabric_gen.generator import generate
     from fabric_gen.errors import TemplateNotImplemented
 
-    # Group 14 (cordic_hyp) is a valid share group with no template yet.
+    # Group 15 (exp_series) is a valid share group with no template yet.
     with pytest.raises(TemplateNotImplemented):
-        generate("fabric.op[@math.sinh, @math.cosh]", tmp_path,
+        generate("fabric.op[@math.exp, @math.exp2, @math.expm1]", tmp_path,
                  registry_path=ROOT / "registry.yaml")
 
 

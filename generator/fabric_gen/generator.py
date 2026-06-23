@@ -27,6 +27,7 @@ _TEMPLATE_MAP = {
     "fp_div_rem": "fu_fp_div_rem.sv.j2",
     "fp_min_max": "fu_fp_min_max.sv.j2",
     "cordic_trig": "fu_cordic_trig.sv.j2",
+    "cordic_hyp": "fu_cordic_hyp.sv.j2",
 }
 
 _CARRY_TERM = "{{(WIDTH-1){1'b0}}, op_sel}"

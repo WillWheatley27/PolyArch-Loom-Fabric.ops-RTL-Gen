@@ -111,7 +111,7 @@ groups:
     family: math
     ops: [math.sinh, math.cosh]
     rtl_module: fu_cordic_hyp.sv
-    status: not_started
+    status: verified
     params: {width: 32, iterations: 16}
 
   - id: 15
