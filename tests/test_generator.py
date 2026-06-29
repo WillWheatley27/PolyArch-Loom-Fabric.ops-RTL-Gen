@@ -467,13 +467,44 @@ def test_generate_group19_golden_matches_committed_rtl(tmp_path):
     assert out.read_text() == ref.read_text()
 
 
+def test_registry_lookup_exp_series():
+    from fabric_gen.registry import load_registry, lookup_by_ops
+
+    reg = load_registry(ROOT / "registry.yaml")
+    grp = lookup_by_ops(["math.exp", "math.exp2", "math.expm1"], reg)
+    assert grp["name"] == "exp_series"
+    assert grp["rtl_module"] == "fu_exp_series.sv"
+    assert grp["params"]["width"] == 32
+
+
+def test_generate_group15_writes_file(tmp_path):
+    from fabric_gen.generator import generate
+
+    out = generate("fabric.op[@math.exp, @math.exp2, @math.expm1]", tmp_path,
+                   registry_path=ROOT / "registry.yaml")
+    assert out.name == "fu_exp_series.sv"
+    text = out.read_text()
+    assert "module fu_exp_series" in text
+    assert "32'sd1549082005" in text   # log2(e) in Q2.30
+    assert "localparam logic [23:0] TWO_F [0:128]" in text
+
+
+def test_generate_group15_golden_matches_committed_rtl(tmp_path):
+    from fabric_gen.generator import generate
+
+    out = generate("fabric.op[@math.exp, @math.exp2, @math.expm1]", tmp_path,
+                   registry_path=ROOT / "registry.yaml")
+    ref = ROOT / "ops/math/exp_series/fu_exp_series.sv"
+    assert out.read_text() == ref.read_text()
+
+
 def test_generate_unimplemented_group_raises(tmp_path):
     from fabric_gen.generator import generate
     from fabric_gen.errors import TemplateNotImplemented
 
-    # Group 15 (exp_series) is a valid share group with no template yet.
+    # Group 16 (log_core) is a valid share group with no template yet.
     with pytest.raises(TemplateNotImplemented):
-        generate("fabric.op[@math.exp, @math.exp2, @math.expm1]", tmp_path,
+        generate("fabric.op[@math.log, @math.log2, @math.log10, @math.log1p]", tmp_path,
                  registry_path=ROOT / "registry.yaml")
 
 

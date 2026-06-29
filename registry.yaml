@@ -119,7 +119,7 @@ groups:
     family: math
     ops: [math.exp, math.exp2, math.expm1]
     rtl_module: fu_exp_series.sv
-    status: not_started
+    status: verified
     params: {width: 32}
 
   - id: 16
