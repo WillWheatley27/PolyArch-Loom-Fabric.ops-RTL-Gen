@@ -143,7 +143,7 @@ groups:
     family: math
     ops: [math.sqrt, math.rsqrt]
     rtl_module: fu_sqrt_rsqrt.sv
-    status: not_started
+    status: verified
     params: {width: 32, iterations: 8}
 
   - id: 19

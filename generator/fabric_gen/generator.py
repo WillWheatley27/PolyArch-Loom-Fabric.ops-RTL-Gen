@@ -32,6 +32,7 @@ _TEMPLATE_MAP = {
     "exp_series": "fu_exp_series.sv.j2",
     "log_core": "fu_log_core.sv.j2",
     "rounding": "fu_rounding.sv.j2",
+    "sqrt_rsqrt": "fu_sqrt_rsqrt.sv.j2",
 }
 
 _CARRY_TERM = "{{(WIDTH-1){1'b0}}, op_sel}"

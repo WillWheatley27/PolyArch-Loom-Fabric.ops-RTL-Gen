@@ -559,13 +559,44 @@ def test_generate_group17_golden_matches_committed_rtl(tmp_path):
     assert out.read_text() == ref.read_text()
 
 
-def test_generate_unimplemented_group_raises(tmp_path):
-    from fabric_gen.generator import generate
-    from fabric_gen.errors import TemplateNotImplemented
+def test_registry_lookup_sqrt_rsqrt():
+    from fabric_gen.registry import load_registry, lookup_by_ops
 
-    # Group 18 (sqrt_rsqrt) is a valid share group with no template yet.
-    with pytest.raises(TemplateNotImplemented):
-        generate("fabric.op[@math.sqrt, @math.rsqrt]", tmp_path,
+    reg = load_registry(ROOT / "registry.yaml")
+    grp = lookup_by_ops(["math.sqrt", "math.rsqrt"], reg)
+    assert grp["name"] == "sqrt_rsqrt"
+    assert grp["rtl_module"] == "fu_sqrt_rsqrt.sv"
+    assert grp["params"]["width"] == 32
+
+
+def test_generate_group18_writes_file(tmp_path):
+    from fabric_gen.generator import generate
+
+    out = generate("fabric.op[@math.sqrt, @math.rsqrt]", tmp_path,
+                   registry_path=ROOT / "registry.yaml")
+    assert out.name == "fu_sqrt_rsqrt.sv"
+    text = out.read_text()
+    assert "module fu_sqrt_rsqrt" in text
+    assert "localparam logic [31:0] SQRT_M [0:128]" in text
+    assert "localparam logic [31:0] RSQRT_M [0:128]" in text
+
+
+def test_generate_group18_golden_matches_committed_rtl(tmp_path):
+    from fabric_gen.generator import generate
+
+    out = generate("fabric.op[@math.sqrt, @math.rsqrt]", tmp_path,
+                   registry_path=ROOT / "registry.yaml")
+    ref = ROOT / "ops/math/sqrt_rsqrt/fu_sqrt_rsqrt.sv"
+    assert out.read_text() == ref.read_text()
+
+
+def test_generate_cross_group_raises(tmp_path):
+    # All 19 share groups are implemented. A cross-group op_list is still illegal.
+    from fabric_gen.generator import generate
+    from fabric_gen.errors import ShareGroupError
+
+    with pytest.raises(ShareGroupError):
+        generate("fabric.op[@math.sqrt, @math.sin]", tmp_path,
                  registry_path=ROOT / "registry.yaml")
 
 

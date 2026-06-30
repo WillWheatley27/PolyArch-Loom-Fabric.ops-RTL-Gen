@@ -39,9 +39,12 @@ PYTHONPATH=generator ./.venv/bin/python -c \
 ```
 
 The parser and share-group validator are general (any op string, all 19 groups).
-RTL emission is currently implemented for **share group 1 (`add_sub`)**,
-**share group 2 (`div_rem_signed`)**, and **share group 3 (`div_rem_unsigned`)**;
-other valid groups report `template not yet implemented`.
+RTL emission is implemented and verified for **all 19 share groups** — integer
+arithmetic/logic (1–7), int↔FP conversion and IEEE-754 FP arithmetic (8–12), and
+the `math`-dialect transcendentals (13–19). Each emitted module has a committed
+golden `.sv`, a self-checking Verilator testbench, and a runnable demo under
+`demos/`. Groups 1–12 and 17 are bit-exact / correctly-rounded; the
+transcendental groups (13–16, 18, 19) are tolerance-verified approximations.
 
 ## Tests
 
