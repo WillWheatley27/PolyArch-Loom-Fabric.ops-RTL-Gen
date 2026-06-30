@@ -529,14 +529,44 @@ def test_generate_group16_golden_matches_committed_rtl(tmp_path):
     assert out.read_text() == ref.read_text()
 
 
+def test_registry_lookup_rounding():
+    from fabric_gen.registry import load_registry, lookup_by_ops
+
+    reg = load_registry(ROOT / "registry.yaml")
+    grp = lookup_by_ops(["math.floor", "math.ceil", "math.round", "math.trunc", "math.roundeven"], reg)
+    assert grp["name"] == "rounding"
+    assert grp["rtl_module"] == "fu_rounding.sv"
+    assert grp["params"]["width"] == 32
+
+
+def test_generate_group17_writes_file(tmp_path):
+    from fabric_gen.generator import generate
+
+    out = generate("fabric.op[@math.floor, @math.ceil, @math.round, @math.trunc, @math.roundeven]",
+                   tmp_path, registry_path=ROOT / "registry.yaml")
+    assert out.name == "fu_rounding.sv"
+    text = out.read_text()
+    assert "module fu_rounding" in text
+    assert "input  logic [2:0]        op_sel," in text
+
+
+def test_generate_group17_golden_matches_committed_rtl(tmp_path):
+    from fabric_gen.generator import generate
+
+    out = generate("fabric.op[@math.floor, @math.ceil, @math.round, @math.trunc, @math.roundeven]",
+                   tmp_path, registry_path=ROOT / "registry.yaml")
+    ref = ROOT / "ops/math/rounding/fu_rounding.sv"
+    assert out.read_text() == ref.read_text()
+
+
 def test_generate_unimplemented_group_raises(tmp_path):
     from fabric_gen.generator import generate
     from fabric_gen.errors import TemplateNotImplemented
 
-    # Group 17 (rounding) is a valid share group with no template yet.
+    # Group 18 (sqrt_rsqrt) is a valid share group with no template yet.
     with pytest.raises(TemplateNotImplemented):
-        generate("fabric.op[@math.floor, @math.ceil, @math.round, @math.trunc, @math.roundeven]",
-                 tmp_path, registry_path=ROOT / "registry.yaml")
+        generate("fabric.op[@math.sqrt, @math.rsqrt]", tmp_path,
+                 registry_path=ROOT / "registry.yaml")
 
 
 def test_generate_illegal_op_list_raises(tmp_path):

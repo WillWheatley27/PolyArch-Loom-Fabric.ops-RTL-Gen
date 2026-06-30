@@ -135,7 +135,7 @@ groups:
     family: math
     ops: [math.floor, math.ceil, math.round, math.trunc, math.roundeven]
     rtl_module: fu_rounding.sv
-    status: not_started
+    status: verified
     params: {width: 32}
 
   - id: 18

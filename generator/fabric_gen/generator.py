@@ -31,6 +31,7 @@ _TEMPLATE_MAP = {
     "approx_tanh_erf": "fu_approx_tanh_erf.sv.j2",
     "exp_series": "fu_exp_series.sv.j2",
     "log_core": "fu_log_core.sv.j2",
+    "rounding": "fu_rounding.sv.j2",
 }
 
 _CARRY_TERM = "{{(WIDTH-1){1'b0}}, op_sel}"
