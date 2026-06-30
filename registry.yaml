@@ -127,7 +127,7 @@ groups:
     family: math
     ops: [math.log, math.log2, math.log10, math.log1p]
     rtl_module: fu_log_core.sv
-    status: not_started
+    status: verified
     params: {width: 32}
 
   - id: 17

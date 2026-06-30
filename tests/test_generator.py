@@ -498,14 +498,45 @@ def test_generate_group15_golden_matches_committed_rtl(tmp_path):
     assert out.read_text() == ref.read_text()
 
 
+def test_registry_lookup_log_core():
+    from fabric_gen.registry import load_registry, lookup_by_ops
+
+    reg = load_registry(ROOT / "registry.yaml")
+    grp = lookup_by_ops(["math.log", "math.log2", "math.log10", "math.log1p"], reg)
+    assert grp["name"] == "log_core"
+    assert grp["rtl_module"] == "fu_log_core.sv"
+    assert grp["params"]["width"] == 32
+
+
+def test_generate_group16_writes_file(tmp_path):
+    from fabric_gen.generator import generate
+
+    out = generate("fabric.op[@math.log, @math.log2, @math.log10, @math.log1p]", tmp_path,
+                   registry_path=ROOT / "registry.yaml")
+    assert out.name == "fu_log_core.sv"
+    text = out.read_text()
+    assert "module fu_log_core" in text
+    assert "32'sd5814540" in text   # ln2 in Q.23
+    assert "localparam logic signed [31:0] LOG2_M [0:128]" in text
+
+
+def test_generate_group16_golden_matches_committed_rtl(tmp_path):
+    from fabric_gen.generator import generate
+
+    out = generate("fabric.op[@math.log, @math.log2, @math.log10, @math.log1p]", tmp_path,
+                   registry_path=ROOT / "registry.yaml")
+    ref = ROOT / "ops/math/log_core/fu_log_core.sv"
+    assert out.read_text() == ref.read_text()
+
+
 def test_generate_unimplemented_group_raises(tmp_path):
     from fabric_gen.generator import generate
     from fabric_gen.errors import TemplateNotImplemented
 
-    # Group 16 (log_core) is a valid share group with no template yet.
+    # Group 17 (rounding) is a valid share group with no template yet.
     with pytest.raises(TemplateNotImplemented):
-        generate("fabric.op[@math.log, @math.log2, @math.log10, @math.log1p]", tmp_path,
-                 registry_path=ROOT / "registry.yaml")
+        generate("fabric.op[@math.floor, @math.ceil, @math.round, @math.trunc, @math.roundeven]",
+                 tmp_path, registry_path=ROOT / "registry.yaml")
 
 
 def test_generate_illegal_op_list_raises(tmp_path):
