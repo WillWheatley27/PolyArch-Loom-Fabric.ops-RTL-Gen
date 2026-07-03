@@ -1,5 +1,6 @@
 """Orchestrate: parse -> validate -> registry lookup -> render template -> write."""
 
+import math
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader
@@ -9,6 +10,7 @@ from .sharegroups import validate
 from .registry import load_registry, lookup_by_ops
 from .errors import TemplateNotImplemented
 from .formats import fp_format, DEFAULT_FP_FORMAT
+from . import approx
 
 _TEMPLATES = Path(__file__).resolve().parents[1] / "templates"
 _DEFAULT_REGISTRY = Path(__file__).resolve().parents[2] / "registry.yaml"
@@ -38,6 +40,37 @@ _TEMPLATE_MAP = {
 
 _CARRY_TERM = "{{(WIDTH-1){1'b0}}, op_sel}"
 
+# Groups whose transcendental core is a compile-time-generated minimax polynomial.
+_POLY_GROUPS = {"sqrt_rsqrt"}
+
+
+def _poly_context(name, fmt):
+    """Compute per-(function, format) polynomial coefficients for the Horner
+    evaluator: fractional bits, coeff width, degrees, and coeffs rendered as
+    sized signed SV literals (handles widths > 32 for fp64)."""
+    mant_w = fmt["mant_w"]
+    frac = mant_w + 4                       # datapath fractional bits (guard incl.)
+    cw = frac + 4                           # coeff width: sign + 3 int + frac
+    scale = 1 << frac
+    target = max(2.0 ** -(mant_w + 1), 1e-11)  # ~half ULP, floored so fp64 stays sane
+
+    def lits(coeffs):
+        ints = approx.fixed_coeffs(coeffs, frac)
+        return [f"{cw}'sd{v}" if v >= 0 else f"-{cw}'sd{-v}" for v in ints]
+
+    ctx = {"frac": frac, "cw": cw}
+    if name == "sqrt_rsqrt":
+        ds, cs, _ = approx.fit_for_precision(lambda f: math.sqrt(1.0 + f), 0.0, 1.0, target, max_degree=14)
+        dr, cr, _ = approx.fit_for_precision(lambda f: 1.0 / math.sqrt(1.0 + f), 0.0, 1.0, target, max_degree=14)
+        w = frac + 2   # width of SQRT2_Q / INVSQRT2_Q
+        ctx.update(
+            sqrt_deg=ds, sqrt_coef_lits=lits(cs),
+            rsqrt_deg=dr, rsqrt_coef_lits=lits(cr),
+            sqrt2_lit=f"{w}'d{round(math.sqrt(2.0) * scale)}",
+            invsqrt2_lit=f"{w}'d{round((1.0 / math.sqrt(2.0)) * scale)}",
+        )
+    return ctx
+
 
 def generate(op_string, out_dir, width=None, fmt=None, registry_path=None):
     parsed = parse_op_string(op_string)
@@ -62,6 +95,7 @@ def generate(op_string, out_dir, width=None, fmt=None, registry_path=None):
         keep_trailing_newline=True,
     )
     fmt_desc = fp_format(fmt or DEFAULT_FP_FORMAT)
+    poly = _poly_context(name, fmt_desc) if name in _POLY_GROUPS else {}
 
     tmpl = env.get_template(_TEMPLATE_MAP[name])
     text = tmpl.render(
@@ -71,6 +105,7 @@ def generate(op_string, out_dir, width=None, fmt=None, registry_path=None):
         carry_term=_CARRY_TERM,
         params=grp.get("params", {}),
         fmt=fmt_desc,
+        poly=poly,
     )
 
     out_dir = Path(out_dir)

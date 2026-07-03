@@ -581,8 +581,10 @@ def test_generate_group18_writes_file(tmp_path):
     assert out.name == "fu_sqrt_rsqrt.sv"
     text = out.read_text()
     assert "module fu_sqrt_rsqrt" in text
-    assert "localparam logic [31:0] SQRT_M [0:128]" in text
-    assert "localparam logic [31:0] RSQRT_M [0:128]" in text
+    # compile-time minimax polynomial (Horner), not a LUT
+    assert "SQRT_C  [0:SQRT_DEG]" in text
+    assert "RSQRT_C [0:RSQRT_DEG]" in text
+    assert "EXP_W  = 8" in text and "MANT_W = 23" in text   # fp32 default
 
 
 def test_generate_group18_golden_matches_committed_rtl(tmp_path):
