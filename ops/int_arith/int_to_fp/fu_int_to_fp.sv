@@ -1,23 +1,30 @@
 // fu_int_to_fp.sv -- Fabric FU for share group int_to_fp.
 // op_list: arith.sitofp, arith.uitofp
-//   op_sel = 0 -> out = f32(signed(a))     (arith.sitofp)
-//   op_sel = 1 -> out = f32(unsigned(a))   (arith.uitofp)
+//   op_sel = 0 -> out = float(signed(a))     (arith.sitofp)
+//   op_sel = 1 -> out = float(unsigned(a))   (arith.uitofp)
 //
-// One shared int->IEEE-754-binary32 encoder; op_sel only selects the
-// absolute-value preprocessor (signed vs unsigned). op_sel is a held config
-// input. Unary op (one data input). Intrinsic latency 1 (registered output).
+// One shared int->IEEE-754 encoder; op_sel only selects the absolute-value
+// preprocessor (signed vs unsigned). op_sel is a held config input. Unary op.
+// Intrinsic latency 1 (registered output).
 //
-// Structural (leading-zero count -> normalize -> round-to-nearest-even). This
-// DIVERGES from loom's behavioral $itor/$shortrealtobits model, which Verilator
-// cannot simulate (shortreal unsupported). int32 never overflows f32 to Inf and
-// never yields NaN/subnormals, so no special-case encoding is needed.
+// PARAMETERIZED: INT_WIDTH-bit integer -> (EXP_W, MANT_W) float. fp32 (8,23)
+// default, fp64 (11,52), bf16 (8,7); INT_WIDTH independent (e.g. 32 or 64).
+// Structural (leading-zero count -> normalize -> round-to-nearest-even). No
+// special-case encoding: an INT_WIDTH integer never overflows these formats to
+// Inf and never yields NaN/subnormals.
 //
-// NOTE: the encoder targets INT_WIDTH = 32 -> binary32 (FP_WIDTH = 32):
-// 1 sign + 8 exponent (bias 127) + 23 mantissa.
+// Unified normalizer: left-pad the magnitude by MANT_W and normalize into a
+// (INT_WIDTH+MANT_W)-bit register so the mantissa/guard/sticky slices stay valid
+// whether the integer is narrower than the mantissa (exact) or wider (rounds).
 
 module fu_int_to_fp #(
-  parameter int unsigned INT_WIDTH = 32,
-  parameter int unsigned FP_WIDTH  = 32
+  parameter  int unsigned INT_WIDTH = 32,
+  parameter  int unsigned EXP_W     = 8,
+  parameter  int unsigned MANT_W    = 23,
+  localparam int unsigned FP_WIDTH  = EXP_W + MANT_W + 1,
+  localparam int unsigned BIAS      = (1 << (EXP_W - 1)) - 1,
+  localparam int unsigned SH_W      = INT_WIDTH + MANT_W,
+  localparam int unsigned LZ_W      = $clog2(INT_WIDTH + 1)
 ) (
   input  logic                  clk,
   input  logic                  rst_n,
@@ -28,112 +35,86 @@ module fu_int_to_fp #(
   input  logic                  in_valid_0,
   output logic                  in_ready_0,
 
-  output logic [FP_WIDTH-1:0]   out_data,     // IEEE-754 binary32 bits
+  output logic [FP_WIDTH-1:0]   out_data,     // IEEE-754 float bits
   output logic                  out_valid,
   input  logic                  out_ready
 );
 
-  // Count leading zeros of a 32-bit value (0..31 for a nonzero input).
-  function automatic logic [5:0] clz32(input logic [31:0] x);
-    logic [5:0] n;
-    logic       found;
-    integer     i;
-    begin : clz_body
-      n     = 6'd0;
-      found = 1'b0;
-      for (i = 31; i >= 0; i = i - 1) begin : clz_loop
-        if (!found) begin : clz_step
-          if (x[i]) found = 1'b1;
-          else      n     = n + 6'd1;
-        end : clz_step
-      end : clz_loop
-      clz32 = n;
-    end : clz_body
+  // Leading-zero count over INT_WIDTH bits (0..INT_WIDTH-1 for a nonzero input).
+  function automatic logic [LZ_W-1:0] clz(input logic [INT_WIDTH-1:0] x);
+    logic [LZ_W-1:0] n; logic found; integer i;
+    begin
+      n = '0; found = 1'b0;
+      for (i = INT_WIDTH - 1; i >= 0; i = i - 1)
+        if (!found) begin if (x[i]) found = 1'b1; else n = n + 1'b1; end
+      clz = n;
+    end
   endfunction
 
-  // ---- combinational int -> binary32 conversion ----
-  logic        sign;
-  logic [31:0] mag;
-  logic [5:0]  lz;
+  logic                 sign;
+  logic [INT_WIDTH-1:0] mag;
+  logic [LZ_W-1:0]      lz;
   // verilator lint_off UNUSEDSIGNAL
-  logic [31:0] shifted;     // bit 31 is the implicit leading 1 (unused below)
+  logic [SH_W-1:0]      shifted;              // leading 1 at bit SH_W-1
+  logic [31:0]          exp_biased, exp_final; // only low EXP_W bits used
   // verilator lint_on UNUSEDSIGNAL
-  logic [22:0] frac;
-  logic        guard, sticky, lsb, round_up;
-  logic [23:0] mant24;
-  logic [7:0]  exp8;
-  logic [7:0]  exp_final;
-  logic [22:0] mant_final;
-  logic [31:0] conv_result;
+  logic [MANT_W-1:0]    frac, mant_final;
+  logic                 guard, sticky, round_up;
+  logic [MANT_W:0]      mant_rnd;
+  logic [FP_WIDTH-1:0]  conv_result;
 
   always_comb begin : convert
-    // signedness preprocessor: op_sel=0 signed (abs), op_sel=1 unsigned
-    if (op_sel == 1'b0) begin : as_signed
+    // signedness preprocessor: op_sel=0 signed (abs via two's-complement negate)
+    if (op_sel == 1'b0) begin
       sign = in_data_0[INT_WIDTH-1];
-      mag  = in_data_0[INT_WIDTH-1] ? (~in_data_0 + 32'd1) : in_data_0;
-    end : as_signed
-    else begin : as_unsigned
+      mag  = in_data_0[INT_WIDTH-1] ? (-in_data_0) : in_data_0;
+    end else begin
       sign = 1'b0;
       mag  = in_data_0;
-    end : as_unsigned
+    end
 
-    // defaults (avoid latches)
-    lz         = 6'd0;
-    shifted    = 32'd0;
-    frac       = 23'd0;
-    lsb        = 1'b0;
-    guard      = 1'b0;
-    sticky     = 1'b0;
-    round_up   = 1'b0;
-    mant24     = 24'd0;
-    exp8       = 8'd0;
-    exp_final  = 8'd0;
-    mant_final = 23'd0;
+    lz = '0; shifted = '0; frac = '0; guard = 1'b0; sticky = 1'b0;
+    round_up = 1'b0; mant_rnd = '0; exp_biased = 32'd0; exp_final = 32'd0; mant_final = '0;
 
-    if (mag == 32'd0) begin : zero_case
-      conv_result = 32'h0000_0000;            // +0.0
-    end : zero_case
-    else begin : normal_case
-      lz       = clz32(mag);
-      shifted  = mag << lz;                    // leading 1 now at bit 31
-      frac     = shifted[30:8];
-      lsb      = shifted[8];
-      guard    = shifted[7];
-      sticky   = |shifted[6:0];
-      round_up = guard & (sticky | lsb);       // round to nearest even
-      mant24   = {1'b0, frac} + {23'd0, round_up};
-      exp8     = 8'd158 - {2'd0, lz};           // (31 - lz) + 127
-      if (mant24[23]) begin : round_overflow
-        exp_final  = exp8 + 8'd1;
-        mant_final = 23'd0;
-      end : round_overflow
-      else begin : no_overflow
-        exp_final  = exp8;
-        mant_final = mant24[22:0];
-      end : no_overflow
-      conv_result = {sign, exp_final, mant_final};
-    end : normal_case
+    if (mag == '0) begin
+      conv_result = {FP_WIDTH{1'b0}};                    // +0.0
+    end else begin
+      lz      = clz(mag);
+      shifted = ({mag, {MANT_W{1'b0}}}) << lz;           // leading 1 at bit SH_W-1
+      frac    = shifted[SH_W-2 -: MANT_W];               // top MANT_W fraction bits
+      guard   = shifted[INT_WIDTH-2];
+      sticky  = |shifted[INT_WIDTH-3:0];
+      round_up = guard & (sticky | frac[0]);             // round to nearest even
+      mant_rnd = {1'b0, frac} + (MANT_W+1)'(round_up);
+      exp_biased = (BIAS + INT_WIDTH - 1) - 32'(lz);
+      if (mant_rnd[MANT_W]) begin
+        exp_final  = exp_biased + 32'd1;                 // rounding carried out
+        mant_final = '0;
+      end else begin
+        exp_final  = exp_biased;
+        mant_final = mant_rnd[MANT_W-1:0];
+      end
+      conv_result = {sign, exp_final[EXP_W-1:0], mant_final};
+    end
   end : convert
 
-  // ---- latency-1 handshake (mirrors loom FP FU) ----
+  // ---- latency-1 handshake ----
   logic fire;
   assign fire       = in_valid_0 & (~out_valid | out_ready);
   assign in_ready_0 = fire;
 
   always_ff @(posedge clk) begin : pipe_reg
-    if (!rst_n) begin : pipe_rst
+    if (!rst_n) begin
       out_valid <= 1'b0;
       out_data  <= {FP_WIDTH{1'b0}};
-    end : pipe_rst
-    else begin : pipe_upd
-      if (fire) begin : pipe_fire
+    end else begin
+      if (fire) begin
         out_data  <= conv_result;
         out_valid <= 1'b1;
-      end : pipe_fire
-      else if (out_ready) begin : pipe_drain
+      end else if (out_ready) begin
         out_valid <= 1'b0;
-      end : pipe_drain
-    end : pipe_upd
+      end
+    end
   end : pipe_reg
 
 endmodule : fu_int_to_fp

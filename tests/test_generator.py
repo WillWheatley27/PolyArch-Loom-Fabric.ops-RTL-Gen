@@ -241,8 +241,10 @@ def test_generate_group8_writes_file(tmp_path):
     assert out.name == "fu_int_to_fp.sv"
     text = out.read_text()
     assert "module fu_int_to_fp" in text
-    assert "parameter int unsigned INT_WIDTH = 32" in text
-    assert "round_up = guard & (sticky | lsb)" in text
+    assert "INT_WIDTH = 32" in text
+    assert "EXP_W     = 8" in text          # fp32 default format
+    assert "MANT_W    = 23" in text
+    assert "round_up = guard & (sticky | frac[0])" in text
 
 
 def test_generate_group8_golden_matches_committed_rtl(tmp_path):
