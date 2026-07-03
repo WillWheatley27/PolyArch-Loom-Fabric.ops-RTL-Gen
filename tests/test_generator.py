@@ -632,6 +632,26 @@ def test_generate_unknown_format_raises(tmp_path):
                  registry_path=ROOT / "registry.yaml")
 
 
+def test_approx_polynomial_fits():
+    # Compile-time minimax-ish fitter (pure Python) for the transcendental FUs.
+    import math
+    from fabric_gen.approx import fit_for_precision, poly_eval, fixed_coeffs
+
+    # fp32-tier fits over the reduced ranges.
+    for func, a, b, max_deg in [
+        (lambda f: math.sqrt(1.0 + f), 0.0, 1.0, 8),
+        (lambda f: 2.0 ** f,           0.0, 1.0, 8),
+        (lambda f: math.log2(1.0 + f), 0.0, 1.0, 10),
+    ]:
+        deg, coeffs, err = fit_for_precision(func, a, b, 3e-7, max_degree=max_deg)
+        assert err < 3e-7
+        assert deg <= max_deg
+        # quantizing to Q2.28 preserves accuracy to well under a fp32 ULP
+        q = fixed_coeffs(coeffs, 28)
+        qc = [c / (1 << 28) for c in q]
+        assert abs(poly_eval(qc, 0.5) - func(0.5)) < 1e-6
+
+
 def test_generate_illegal_op_list_raises(tmp_path):
     from fabric_gen.generator import generate
     from fabric_gen.errors import ShareGroupError
