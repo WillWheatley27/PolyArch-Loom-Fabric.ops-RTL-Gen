@@ -7,19 +7,29 @@
 //   op_sel = 4 -> roundeven(x)  ({{ op_list[4] }})  nearest, ties to even
 //
 // One shared rounding network; op_sel selects the mode. op_sel held config.
-// Unary op. Intrinsic latency 1. binary32. EXACT (bit-accurate, no LUT/approx):
-// pure exponent/mantissa manipulation. Subnormals FTZ -> signed zero (documented
-// deviation: e.g. floor of a tiny negative subnormal gives -0, not -1).
+// Unary op. Intrinsic latency 1. EXACT (bit-accurate, no LUT/approx): pure
+// exponent/mantissa manipulation. Subnormals FTZ -> signed zero.
+//
+// PARAMETERIZED IEEE-754 format via (EXP_W, MANT_W): fp32 (8,23) default,
+// fp64 (11,52), bf16 (8,7). All boundary constants derive from the format:
+// BIAS, integer threshold BIAS+MANT_W, and the 0.5 boundary BIAS-1.
 
 module {{ module_name }} #(
-  parameter int unsigned WIDTH = {{ params.width }}
+  parameter  int unsigned EXP_W  = {{ fmt.exp_w }},
+  parameter  int unsigned MANT_W = {{ fmt.mant_w }},
+  localparam int unsigned WIDTH  = EXP_W + MANT_W + 1,
+  localparam int unsigned SIG_W  = MANT_W + 1,
+  localparam int unsigned ONE_W  = MANT_W + 2,               // holds 2^fb and carry
+  localparam int unsigned BIAS   = (1 << (EXP_W - 1)) - 1,
+  localparam int unsigned INTTH  = BIAS + MANT_W,            // E >= INTTH -> already integer
+  localparam int unsigned IDXW   = $clog2(SIG_W)             // bit-index width into sig
 ) (
   input  logic              clk,
   input  logic              rst_n,
 
   input  logic [2:0]        op_sel,     // 0=floor 1=ceil 2=round 3=trunc 4=roundeven
 
-  input  logic [WIDTH-1:0]  in_data_0,  // x (binary32)
+  input  logic [WIDTH-1:0]  in_data_0,  // x
   input  logic              in_valid_0,
   output logic              in_ready_0,
 
@@ -28,69 +38,72 @@ module {{ module_name }} #(
   input  logic              out_ready
 );
 
-  logic        s;
-  logic [7:0]  e_in;
-  logic [22:0] m_in;
-  logic [23:0] sig;
+  localparam logic [WIDTH-1:0] POS1 = {1'b0, EXP_W'(BIAS), {MANT_W{1'b0}}};   // +1.0
+  localparam logic [WIDTH-1:0] NEG1 = {1'b1, EXP_W'(BIAS), {MANT_W{1'b0}}};   // -1.0
 
-  // general fractional case (127 <= E <= 149)
-  logic [4:0]  fb;
+  logic              s;
+  logic [EXP_W-1:0]  e_in;
+  logic [MANT_W-1:0] m_in;
+  logic [SIG_W-1:0]  sig;
+
+  // general fractional case (BIAS <= E < INTTH): drop fb = INTTH - E bits
+  logic [EXP_W-1:0]  fb;
   // verilator lint_off UNUSEDSIGNAL
-  logic [24:0] onefb, mask, half;   // bit 24 never set (fb <= 23)
-  logic [24:0] sigr;                // sigr[23] is the implicit leading 1 (unused)
+  logic [ONE_W-1:0]  onefb, mask, half;   // top bit unused for the masks
+  logic [ONE_W-1:0]  sigr;                // sigr[SIG_W-1] is the implicit leading 1
   // verilator lint_on UNUSEDSIGNAL
-  logic [23:0] fracb, sigt;
-  logic        intlsb, roundup;
-  logic [7:0]  e_out;
-  logic [22:0] mant_out;
-  logic [31:0] gen_res;
+  logic [SIG_W-1:0]  fracb, sigt;
+  logic              intlsb, roundup;
+  logic [EXP_W-1:0]  e_out;
+  logic [MANT_W-1:0] mant_out;
+  logic [WIDTH-1:0]  gen_res;
 
   // |x| < 1 case
-  logic        ge_half, gt_half;
-  logic [31:0] sub_res;
+  logic              ge_half, gt_half;
+  logic [WIDTH-1:0]  sub_res;
 
-  logic [31:0] conv_result;
+  logic [WIDTH-1:0]  conv_result;
 
   always_comb begin : datapath
-    s = in_data_0[31]; e_in = in_data_0[30:23]; m_in = in_data_0[22:0];
+    s = in_data_0[WIDTH-1]; e_in = in_data_0[WIDTH-2:MANT_W]; m_in = in_data_0[MANT_W-1:0];
     sig = {1'b1, m_in};
 
-    // ---- general fractional (fb = 150 - E dropped bits; in [1,23] when used) ----
-    fb     = 5'(8'd150 - e_in);
-    onefb  = 25'd1 << fb;
-    mask   = onefb - 25'd1;
+    // ---- general fractional (fb = INTTH - E dropped bits; in [1,MANT_W] when used) ----
+    fb     = EXP_W'(INTTH) - e_in;
+    onefb  = ONE_W'(1) << fb;
+    mask   = onefb - ONE_W'(1);
     half   = onefb >> 1;
-    fracb  = sig & mask[23:0];
-    sigt   = sig & ~mask[23:0];
-    intlsb = sig[fb];
+    fracb  = sig & mask[SIG_W-1:0];
+    sigt   = sig & ~mask[SIG_W-1:0];
+    intlsb = sig[fb[IDXW-1:0]];
     case (op_sel)
-      3'd0:    roundup = s & (|fracb);                              // floor
-      3'd1:    roundup = (~s) & (|fracb);                           // ceil
-      3'd2:    roundup = (fracb >= half[23:0]);                     // round (ties away)
-      3'd4:    roundup = (fracb > half[23:0]) | ((fracb == half[23:0]) & intlsb); // roundeven
-      default: roundup = 1'b0;                                      // trunc / reserved
+      3'd0:    roundup = s & (|fracb);                                               // floor
+      3'd1:    roundup = (~s) & (|fracb);                                            // ceil
+      3'd2:    roundup = (fracb >= half[SIG_W-1:0]);                                 // round (ties away)
+      3'd4:    roundup = (fracb > half[SIG_W-1:0]) | ((fracb == half[SIG_W-1:0]) & intlsb); // roundeven
+      default: roundup = 1'b0;                                                       // trunc / reserved
     endcase
-    sigr = {1'b0, sigt} + (roundup ? onefb : 25'd0);
-    if (sigr[24]) begin e_out = e_in + 8'd1; mant_out = 23'd0;     end
-    else          begin e_out = e_in;        mant_out = sigr[22:0]; end
+    sigr = {1'b0, sigt} + (roundup ? onefb : ONE_W'(0));
+    if (sigr[SIG_W]) begin e_out = e_in + EXP_W'(1); mant_out = '0;             end
+    else             begin e_out = e_in;             mant_out = sigr[MANT_W-1:0]; end
     gen_res = {s, e_out, mant_out};
 
-    // ---- |x| < 1 (E in [1,126]) ----
-    ge_half = (e_in == 8'd126);                 // |x| >= 0.5
-    gt_half = (e_in == 8'd126) & (|m_in);       // |x| > 0.5
+    // ---- |x| < 1 (E in [1, BIAS-1]) ----
+    ge_half = (e_in == EXP_W'(BIAS - 1));                 // |x| >= 0.5
+    gt_half = (e_in == EXP_W'(BIAS - 1)) & (|m_in);       // |x| > 0.5
     case (op_sel)
-      3'd0:    sub_res = s ? {1'b1, 8'd127, 23'd0} : 32'd0;         // floor: -1 / +0
-      3'd1:    sub_res = s ? {1'b1, 31'd0} : {1'b0, 8'd127, 23'd0}; // ceil: -0 / +1
-      3'd2:    sub_res = ge_half ? {s, 8'd127, 23'd0} : {s, 31'd0}; // round
-      3'd4:    sub_res = gt_half ? {s, 8'd127, 23'd0} : {s, 31'd0}; // roundeven
-      default: sub_res = {s, 31'd0};                               // trunc: +/-0
+      3'd0:    sub_res = s ? NEG1 : {WIDTH{1'b0}};                     // floor: -1 / +0
+      3'd1:    sub_res = s ? {1'b1, {(WIDTH-1){1'b0}}} : POS1;         // ceil: -0 / +1
+      3'd2:    sub_res = ge_half ? {s, EXP_W'(BIAS), {MANT_W{1'b0}}} : {s, {(WIDTH-1){1'b0}}}; // round
+      3'd4:    sub_res = gt_half ? {s, EXP_W'(BIAS), {MANT_W{1'b0}}} : {s, {(WIDTH-1){1'b0}}}; // roundeven
+      default: sub_res = {s, {(WIDTH-1){1'b0}}};                       // trunc: +/-0
     endcase
 
     // ---- top selection ----
-    if (e_in == 8'd0)        conv_result = {s, 31'd0};   // FTZ subnormal/zero -> signed 0
-    else if (e_in >= 8'd150) conv_result = in_data_0;    // already integer, or Inf/NaN
-    else if (e_in < 8'd127)  conv_result = sub_res;      // |x| < 1
-    else                     conv_result = gen_res;      // mixed integer+fraction
+    if (e_in == '0)                    conv_result = {s, {(WIDTH-1){1'b0}}}; // FTZ subnormal/zero
+    else if (e_in >= EXP_W'(INTTH))    conv_result = in_data_0;             // integer, or Inf/NaN
+    else if (e_in < EXP_W'(BIAS))      conv_result = sub_res;               // |x| < 1
+    else                               conv_result = gen_res;               // mixed integer+fraction
   end : datapath
 
   // ---- latency-1 handshake (unary) ----
