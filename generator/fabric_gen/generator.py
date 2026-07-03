@@ -8,6 +8,7 @@ from .parser import parse_op_string
 from .sharegroups import validate
 from .registry import load_registry, lookup_by_ops
 from .errors import TemplateNotImplemented
+from .formats import fp_format, DEFAULT_FP_FORMAT
 
 _TEMPLATES = Path(__file__).resolve().parents[1] / "templates"
 _DEFAULT_REGISTRY = Path(__file__).resolve().parents[2] / "registry.yaml"
@@ -38,7 +39,7 @@ _TEMPLATE_MAP = {
 _CARRY_TERM = "{{(WIDTH-1){1'b0}}, op_sel}"
 
 
-def generate(op_string, out_dir, width=None, registry_path=None):
+def generate(op_string, out_dir, width=None, fmt=None, registry_path=None):
     parsed = parse_op_string(op_string)
     validate(parsed.op_list)  # raises ShareGroupError on illegal combinations
 
@@ -60,6 +61,8 @@ def generate(op_string, out_dir, width=None, registry_path=None):
         lstrip_blocks=True,
         keep_trailing_newline=True,
     )
+    fmt_desc = fp_format(fmt or DEFAULT_FP_FORMAT)
+
     tmpl = env.get_template(_TEMPLATE_MAP[name])
     text = tmpl.render(
         module_name=module_name,
@@ -67,6 +70,7 @@ def generate(op_string, out_dir, width=None, registry_path=None):
         op_list=parsed.op_list,
         carry_term=_CARRY_TERM,
         params=grp.get("params", {}),
+        fmt=fmt_desc,
     )
 
     out_dir = Path(out_dir)
