@@ -275,8 +275,10 @@ def test_generate_group9_writes_file(tmp_path):
     assert out.name == "fu_fp_to_int.sv"
     text = out.read_text()
     assert "module fu_fp_to_int" in text
-    assert "parameter int unsigned FP_WIDTH  = 32" in text
-    assert "result = sign ? (~mag + 32'd1) : mag;" in text
+    assert "EXP_W     = 8" in text          # fp32 default format
+    assert "MANT_W    = 23" in text
+    assert "INT_WIDTH = 32" in text
+    assert "result = sign ? (-mag) : mag;" in text
 
 
 def test_generate_group9_golden_matches_committed_rtl(tmp_path):
