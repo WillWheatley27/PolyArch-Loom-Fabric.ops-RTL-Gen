@@ -604,6 +604,34 @@ def test_generate_cross_group_raises(tmp_path):
                  registry_path=ROOT / "registry.yaml")
 
 
+def test_generate_integer_width_override(tmp_path):
+    # Integer FUs are runtime WIDTH-parameterized; the generator honors --width.
+    from fabric_gen.generator import generate
+
+    for w in (8, 16, 64):
+        out = generate("fabric.op[@arith.addi, @arith.subi]", tmp_path, width=w,
+                       registry_path=ROOT / "registry.yaml")
+        assert f"WIDTH = {w}" in out.read_text()
+
+
+def test_generate_fp_format_override(tmp_path):
+    # FP FUs are parameterized by (EXP_W, MANT_W); the generator honors --format.
+    from fabric_gen.generator import generate
+
+    out = generate("fabric.op[@arith.minimumf, @arith.maximumf]", tmp_path, fmt="fp64",
+                   registry_path=ROOT / "registry.yaml")
+    text = out.read_text()
+    assert "MANT_W = 52" in text and "EXP_W  = 11" in text
+
+
+def test_generate_unknown_format_raises(tmp_path):
+    from fabric_gen.generator import generate
+
+    with pytest.raises(ValueError):
+        generate("fabric.op[@arith.addf, @arith.subf]", tmp_path, fmt="fp128",
+                 registry_path=ROOT / "registry.yaml")
+
+
 def test_generate_illegal_op_list_raises(tmp_path):
     from fabric_gen.generator import generate
     from fabric_gen.errors import ShareGroupError
