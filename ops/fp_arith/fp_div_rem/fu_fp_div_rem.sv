@@ -1,28 +1,39 @@
 // fu_fp_div_rem.sv -- Fabric FU for share group fp_div_rem.
 // op_list: arith.divf, arith.remf
-//   op_sel = 0 -> out = a / b        (arith.divf)
+//   op_sel = 0 -> out = a / b        (arith.divf)  (RNE)
 //   op_sel = 1 -> out = fmod(a, b)   (arith.remf)  [a - b*trunc(a/b), sign of a]
 //
 // One shared restoring-division core; op_sel selects quotient (divf, RNE) vs
-// fmod residue (remf). op_sel held config. 2-input join, multi-cycle FSM
-// (variable latency). Structural (Verilator cannot run loom's shortreal model).
-// Subnormals FLUSHED TO ZERO (FTZ). NaN/Inf/signed-zero handled. binary32.
+// fmod residue (remf). op_sel held config. 2-input join, multi-cycle FSM.
+// Structural (Verilator cannot run loom's shortreal model). Subnormals FTZ.
+// remf is fmod (MLIR/LLVM frem), NOT IEEE remainder; fmod is exact.
 //
-// remf is fmod (MLIR/LLVM frem), NOT IEEE remainder. fmod is exact (no rounding).
+// PARAMETERIZED IEEE-754 format via (EXP_W, MANT_W): fp32 (8,23) default,
+// fp64 (11,52), bf16 (8,7). Divider widths derive from the format; the fmod step
+// count is the exponent difference (up to ~2^EXP_W cycles).
 
 module fu_fp_div_rem #(
-  parameter int unsigned WIDTH = 32
+  parameter  int unsigned EXP_W  = 8,
+  parameter  int unsigned MANT_W = 23,
+  localparam int unsigned WIDTH  = EXP_W + MANT_W + 1,
+  localparam int unsigned SIG_W  = MANT_W + 1,        // significand incl. leading 1
+  localparam int unsigned REM_W  = MANT_W + 2,        // partial remainder (SIG_W + 1)
+  localparam int unsigned QUO_W  = MANT_W + 5,        // quotient accumulator
+  localparam int unsigned NITER  = MANT_W + 4,        // divf shift-subtract steps
+  localparam int unsigned LZW    = $clog2(SIG_W + 1),
+  localparam int unsigned ES_W   = EXP_W + 2,         // signed exponent working width
+  localparam int unsigned CNT_W  = EXP_W + 1          // step counter (holds ea-eb and NITER)
 ) (
   input  logic              clk,
   input  logic              rst_n,
 
   input  logic              op_sel,     // 0 = arith.divf, 1 = arith.remf (fmod)
 
-  input  logic [WIDTH-1:0]  in_data_0,  // operand A (dividend, binary32)
+  input  logic [WIDTH-1:0]  in_data_0,  // operand A (dividend)
   input  logic              in_valid_0,
   output logic              in_ready_0,
 
-  input  logic [WIDTH-1:0]  in_data_1,  // operand B (divisor, binary32)
+  input  logic [WIDTH-1:0]  in_data_1,  // operand B (divisor)
   input  logic              in_valid_1,
   output logic              in_ready_1,
 
@@ -31,133 +42,131 @@ module fu_fp_div_rem #(
   input  logic              out_ready
 );
 
-  // Count leading zeros of a 24-bit value (0..23; x assumed nonzero).
-  function automatic logic [4:0] clz24(input logic [23:0] x);
-    logic [4:0] n; logic f; integer i;
-    begin : c
-      n = 5'd0; f = 1'b0;
-      for (i = 23; i >= 0; i = i - 1)
-        if (!f) begin if (x[i]) f = 1'b1; else n = n + 5'd1; end
-      clz24 = n;
-    end : c
+  localparam logic [WIDTH-1:0] QNAN    = {1'b0, {EXP_W{1'b1}}, 1'b1, {(MANT_W-1){1'b0}}};
+  localparam int unsigned      EXP_MAX = (1 << EXP_W) - 1;
+  localparam int unsigned      BIAS    = (1 << (EXP_W - 1)) - 1;
+
+  // Count leading zeros over SIG_W bits (x assumed nonzero).
+  function automatic logic [LZW-1:0] clz(input logic [SIG_W-1:0] x);
+    logic [LZW-1:0] n; logic f; integer i;
+    begin
+      n = '0; f = 1'b0;
+      for (i = SIG_W - 1; i >= 0; i = i - 1)
+        if (!f) begin if (x[i]) f = 1'b1; else n = n + 1'b1; end
+      clz = n;
+    end
   endfunction
 
   typedef enum logic [1:0] { ST_IDLE = 2'd0, ST_CALC = 2'd1, ST_DONE = 2'd2 } state_t;
   state_t state_r, state_next;
 
-  // ---- unpack inputs (combinational) ----
-  logic        sa, sb;
-  logic [7:0]  ea, eb;
-  logic [22:0] ma, mb;
-  logic [23:0] sig_a, sig_b;
-  logic        a_nan, b_nan, a_inf, b_inf, a_zero, b_zero, a_lt_b;
+  // ---- unpack inputs ----
+  logic              sa, sb;
+  logic [EXP_W-1:0]  ea, eb;
+  logic [MANT_W-1:0] ma, mb;
+  logic [SIG_W-1:0]  sig_a, sig_b;
+  logic              a_nan, b_nan, a_inf, b_inf, a_zero, b_zero, a_lt_b;
 
   always_comb begin : unpack
-    sa = in_data_0[31]; ea = in_data_0[30:23]; ma = in_data_0[22:0];
-    sb = in_data_1[31]; eb = in_data_1[30:23]; mb = in_data_1[22:0];
-    a_nan  = (ea == 8'hFF) & (|ma);
-    b_nan  = (eb == 8'hFF) & (|mb);
-    a_inf  = (ea == 8'hFF) & (~|ma);
-    b_inf  = (eb == 8'hFF) & (~|mb);
-    a_zero = (ea == 8'd0);                 // FTZ
-    b_zero = (eb == 8'd0);
-    sig_a  = {1'b1, ma};
-    sig_b  = {1'b1, mb};
+    sa = in_data_0[WIDTH-1]; ea = in_data_0[WIDTH-2:MANT_W]; ma = in_data_0[MANT_W-1:0];
+    sb = in_data_1[WIDTH-1]; eb = in_data_1[WIDTH-2:MANT_W]; mb = in_data_1[MANT_W-1:0];
+    a_nan  = (&ea) & (|ma); b_nan = (&eb) & (|mb);
+    a_inf  = (&ea) & (~|ma); b_inf = (&eb) & (~|mb);
+    a_zero = (ea == '0); b_zero = (eb == '0);        // FTZ
+    sig_a  = {1'b1, ma}; sig_b = {1'b1, mb};
     a_lt_b = (ea < eb) | ((ea == eb) & (ma < mb));
   end : unpack
 
   // ---- captured state ----
-  logic         op_r, sign_r;
-  logic [7:0]   ea_r, eb_r;
-  logic [23:0]  sig_b_r;
+  logic              op_r, sign_r;
+  logic [EXP_W-1:0]  ea_r, eb_r;
+  logic [SIG_W-1:0]  sig_b_r;
   // verilator lint_off UNUSEDSIGNAL
-  logic [24:0]  rem_r;        // partial remainder (< 2^24); bit24 transient
-  logic [27:0]  quo_r;        // divf quotient accumulator
+  logic [REM_W-1:0]  rem_r;        // partial remainder; top bit transient
+  logic [QUO_W-1:0]  quo_r;        // divf quotient accumulator
   // verilator lint_on UNUSEDSIGNAL
-  logic [7:0]   cnt_r;
+  logic [CNT_W-1:0]  cnt_r;
 
-  // ---- one shift-subtract iteration (combinational, from rem_r/sig_b_r) ----
-  logic [24:0] rem_sh, rem_sub;
-  logic        ge;
+  // ---- one shift-subtract iteration ----
+  logic [REM_W-1:0] rem_sh, rem_sub;
+  logic             ge;
   always_comb begin : iter
-    rem_sh  = {rem_r[23:0], 1'b0};
+    rem_sh  = {rem_r[SIG_W-1:0], 1'b0};
     ge      = (rem_sh >= {1'b0, sig_b_r});
     rem_sub = ge ? (rem_sh - {1'b0, sig_b_r}) : rem_sh;
   end : iter
 
-  // ---- final normalize/round (combinational, from captured regs) ----
+  // ---- final normalize/round ----
   // verilator lint_off UNUSEDSIGNAL
-  logic [27:0] normq;
+  logic [QUO_W-1:0]  normq;
+  logic [SIG_W-1:0]  norm_rem;      // top bit is the implicit leading 1 (not read)
   // verilator lint_on UNUSEDSIGNAL
-  logic [22:0] mant_d, mant_fd, mant_rem;
-  logic        guard_d, rsticky_d, roundup_d;
-  logic [23:0] mant24_d;
-  logic signed [9:0] exp_unb_d, exp_b_d, exp_bf_d, exp_b_rem;
-  logic [4:0]  clz_r;
-  // verilator lint_off UNUSEDSIGNAL
-  logic [23:0] norm_rem;       // bit 23 is the implicit leading 1 (not read)
-  // verilator lint_on UNUSEDSIGNAL
-  logic [31:0] fin_result;
+  logic [MANT_W-1:0] mant_d, mant_fd, mant_rem;
+  logic              guard_d, rsticky_d, roundup_d;
+  logic [SIG_W-1:0]  mant24_d;
+  logic signed [ES_W-1:0] exp_unb_d, exp_b_d, exp_bf_d, exp_b_rem;
+  logic [LZW-1:0]    clz_r;
+  logic [WIDTH-1:0]  fin_result;
 
   always_comb begin : finalize
     // divf path
-    normq     = quo_r[27] ? quo_r : {quo_r[26:0], 1'b0};
-    mant_d    = normq[26:4];
+    normq     = quo_r[QUO_W-1] ? quo_r : {quo_r[QUO_W-2:0], 1'b0};
+    mant_d    = normq[QUO_W-2 : 4];
     guard_d   = normq[3];
-    rsticky_d = normq[2] | normq[1] | normq[0] | (rem_r != 25'd0);
+    rsticky_d = normq[2] | normq[1] | normq[0] | (rem_r != '0);
     roundup_d = guard_d & (rsticky_d | mant_d[0]);
-    mant24_d  = {1'b0, mant_d} + {23'd0, roundup_d};
-    exp_unb_d = $signed({2'b00, ea_r}) - $signed({2'b00, eb_r})
-                + (quo_r[27] ? 10'sd0 : -10'sd1);
-    exp_b_d   = exp_unb_d + 10'sd127;
-    if (mant24_d[23]) begin
-      mant_fd = 23'd0;       exp_bf_d = exp_b_d + 10'sd1;
+    mant24_d  = {1'b0, mant_d} + SIG_W'(roundup_d);
+    exp_unb_d = signed'(ES_W'(ea_r)) - signed'(ES_W'(eb_r))
+                - (quo_r[QUO_W-1] ? signed'(ES_W'(0)) : signed'(ES_W'(1)));
+    exp_b_d   = exp_unb_d + signed'(ES_W'(BIAS));
+    if (mant24_d[SIG_W-1]) begin
+      mant_fd = '0;              exp_bf_d = exp_b_d + signed'(ES_W'(1));
     end else begin
-      mant_fd = mant24_d[22:0]; exp_bf_d = exp_b_d;
+      mant_fd = mant24_d[MANT_W-1:0]; exp_bf_d = exp_b_d;
     end
 
     // remf path
-    clz_r    = clz24(rem_r[23:0]);
-    norm_rem = rem_r[23:0] << clz_r;
-    mant_rem = norm_rem[22:0];
-    exp_b_rem = $signed({2'b00, eb_r}) - $signed({5'sd0, clz_r});
+    clz_r     = clz(rem_r[SIG_W-1:0]);
+    norm_rem  = rem_r[SIG_W-1:0] << clz_r;
+    mant_rem  = norm_rem[MANT_W-1:0];
+    exp_b_rem = signed'(ES_W'(eb_r)) - signed'(ES_W'(clz_r));
 
     if (op_r == 1'b0) begin : fin_div
-      if (exp_bf_d >= 10'sd255)     fin_result = {sign_r, 8'hFF, 23'd0};   // Inf
-      else if (exp_bf_d <= 10'sd0)  fin_result = {sign_r, 8'd0,  23'd0};   // FTZ
-      else                          fin_result = {sign_r, exp_bf_d[7:0], mant_fd};
+      if (exp_bf_d >= signed'(ES_W'(EXP_MAX)))  fin_result = {sign_r, {EXP_W{1'b1}}, {MANT_W{1'b0}}};
+      else if (exp_bf_d <= 0)                   fin_result = {sign_r, {EXP_W{1'b0}}, {MANT_W{1'b0}}};
+      else                                      fin_result = {sign_r, exp_bf_d[EXP_W-1:0], mant_fd};
     end : fin_div
     else begin : fin_rem
-      if (rem_r == 25'd0)           fin_result = {sign_r, 31'd0};          // exact zero
-      else if (exp_b_rem <= 10'sd0) fin_result = {sign_r, 8'd0, 23'd0};    // FTZ underflow
-      else                          fin_result = {sign_r, exp_b_rem[7:0], mant_rem};
+      if (rem_r == '0)                          fin_result = {sign_r, {(WIDTH-1){1'b0}}};
+      else if (exp_b_rem <= 0)                  fin_result = {sign_r, {EXP_W{1'b0}}, {MANT_W{1'b0}}};
+      else                                      fin_result = {sign_r, exp_b_rem[EXP_W-1:0], mant_rem};
     end : fin_rem
   end : finalize
 
-  // ---- special-case result (combinational, from inputs) ----
-  logic [31:0] special_result;
-  logic        is_special;        // result decided without iterating
+  // ---- special-case result ----
+  logic [WIDTH-1:0] special_result;
+  logic             is_special;
   always_comb begin : special
     is_special     = 1'b1;
-    special_result = 32'h7FC0_0000;          // default qNaN
+    special_result = QNAN;
     if (op_sel == 1'b0) begin : sp_div
-      if      (a_nan | b_nan)      special_result = 32'h7FC0_0000;
-      else if (a_inf & b_inf)      special_result = 32'h7FC0_0000;          // Inf/Inf
-      else if (a_inf)              special_result = {sa ^ sb, 8'hFF, 23'd0}; // Inf/x
-      else if (b_inf)              special_result = {sa ^ sb, 31'd0};        // x/Inf=0
-      else if (b_zero & a_zero)    special_result = 32'h7FC0_0000;          // 0/0
-      else if (b_zero)             special_result = {sa ^ sb, 8'hFF, 23'd0}; // x/0=Inf
-      else if (a_zero)             special_result = {sa ^ sb, 31'd0};        // 0/x=0
-      else                         is_special = 1'b0;
+      if      (a_nan | b_nan)   special_result = QNAN;
+      else if (a_inf & b_inf)   special_result = QNAN;                                   // Inf/Inf
+      else if (a_inf)           special_result = {sa ^ sb, {EXP_W{1'b1}}, {MANT_W{1'b0}}};// Inf/x
+      else if (b_inf)           special_result = {sa ^ sb, {(WIDTH-1){1'b0}}};           // x/Inf=0
+      else if (b_zero & a_zero) special_result = QNAN;                                    // 0/0
+      else if (b_zero)          special_result = {sa ^ sb, {EXP_W{1'b1}}, {MANT_W{1'b0}}};// x/0=Inf
+      else if (a_zero)          special_result = {sa ^ sb, {(WIDTH-1){1'b0}}};           // 0/x=0
+      else                      is_special = 1'b0;
     end : sp_div
     else begin : sp_rem
-      if      (a_nan | b_nan)      special_result = 32'h7FC0_0000;
-      else if (b_zero)             special_result = 32'h7FC0_0000;          // fmod(x,0)
-      else if (a_inf)              special_result = 32'h7FC0_0000;          // fmod(Inf,y)
-      else if (b_inf)              special_result = {sa, ea, ma};           // fmod(x,Inf)=x
-      else if (a_zero)             special_result = {sa, 31'd0};            // fmod(0,b)=0
-      else if (a_lt_b)             special_result = {sa, ea, ma};           // |a|<|b| -> a
-      else                         is_special = 1'b0;
+      if      (a_nan | b_nan)   special_result = QNAN;
+      else if (b_zero)          special_result = QNAN;                                    // fmod(x,0)
+      else if (a_inf)           special_result = QNAN;                                    // fmod(Inf,y)
+      else if (b_inf)           special_result = {sa, ea, ma};                            // fmod(x,Inf)=x
+      else if (a_zero)          special_result = {sa, {(WIDTH-1){1'b0}}};                 // fmod(0,b)=0
+      else if (a_lt_b)          special_result = {sa, ea, ma};                            // |a|<|b|->a
+      else                      is_special = 1'b0;
     end : sp_rem
   end : special
 
@@ -171,60 +180,53 @@ module fu_fp_div_rem #(
   always_comb begin : nsl
     state_next = state_r;
     case (state_r)
-      ST_IDLE:  if (accept)        state_next = is_special ? ST_DONE : ST_CALC;
-      ST_CALC:  if (cnt_r == 8'd0) state_next = ST_DONE;
-      ST_DONE:  if (out_ready)     state_next = ST_IDLE;
-      default:                     state_next = ST_IDLE;
+      ST_IDLE:  if (accept)         state_next = is_special ? ST_DONE : ST_CALC;
+      ST_CALC:  if (cnt_r == '0)    state_next = ST_DONE;
+      ST_DONE:  if (out_ready)      state_next = ST_IDLE;
+      default:                      state_next = ST_IDLE;
     endcase
   end : nsl
 
   always_ff @(posedge clk) begin : seq
-    if (!rst_n) begin : rst
+    if (!rst_n) begin
       state_r <= ST_IDLE; out_valid <= 1'b0; out_data <= {WIDTH{1'b0}};
-      op_r <= 1'b0; sign_r <= 1'b0; ea_r <= 8'd0; eb_r <= 8'd0;
-      sig_b_r <= 24'd0; rem_r <= 25'd0; quo_r <= 28'd0; cnt_r <= 8'd0;
-    end : rst
-    else begin : run
+      op_r <= 1'b0; sign_r <= 1'b0; ea_r <= '0; eb_r <= '0;
+      sig_b_r <= '0; rem_r <= '0; quo_r <= '0; cnt_r <= '0;
+    end else begin
       state_r <= state_next;
       case (state_r)
-        ST_IDLE: if (accept) begin : acc
-          op_r    <= op_sel;
-          ea_r    <= ea; eb_r <= eb; sig_b_r <= sig_b;
-          if (is_special) begin : sp
+        ST_IDLE: if (accept) begin
+          op_r <= op_sel; ea_r <= ea; eb_r <= eb; sig_b_r <= sig_b;
+          if (is_special) begin
             out_data <= special_result; out_valid <= 1'b1;
-          end : sp
-          else if (op_sel == 1'b0) begin : setup_div
+          end else if (op_sel == 1'b0) begin : setup_div
             sign_r <= sa ^ sb;
-            // initial reduce so the partial remainder starts < divisor; the
-            // integer quotient bit (ratio >= 1) seeds quo bit 0.
-            if (sig_a >= sig_b) begin : ge1
-              rem_r <= {1'b0, (sig_a - sig_b)}; quo_r <= 28'd1;
-            end : ge1
-            else begin : lt1
-              rem_r <= {1'b0, sig_a};           quo_r <= 28'd0;
-            end : lt1
-            cnt_r <= 8'd27;
+            if (sig_a >= sig_b) begin
+              rem_r <= {1'b0, (sig_a - sig_b)}; quo_r <= QUO_W'(1);
+            end else begin
+              rem_r <= {1'b0, sig_a};           quo_r <= '0;
+            end
+            cnt_r <= CNT_W'(NITER);
           end : setup_div
           else begin : setup_rem
             sign_r <= sa;
             rem_r  <= (sig_a >= sig_b) ? {1'b0, (sig_a - sig_b)} : {1'b0, sig_a};
-            cnt_r  <= ea - eb;
+            cnt_r  <= CNT_W'(ea) - CNT_W'(eb);
           end : setup_rem
-        end : acc
-        ST_CALC: begin : calc
-          if (cnt_r == 8'd0) begin : finish
+        end
+        ST_CALC: begin
+          if (cnt_r == '0) begin
             out_data <= fin_result; out_valid <= 1'b1;
-          end : finish
-          else begin : step
+          end else begin
             rem_r <= rem_sub;
-            quo_r <= {quo_r[26:0], ge};        // only meaningful for divf
-            cnt_r <= cnt_r - 8'd1;
-          end : step
-        end : calc
+            quo_r <= {quo_r[QUO_W-2:0], ge};
+            cnt_r <= cnt_r - CNT_W'(1);
+          end
+        end
         ST_DONE: if (out_ready) out_valid <= 1'b0;
         default: ;
       endcase
-    end : run
+    end
   end : seq
 
 endmodule : fu_fp_div_rem

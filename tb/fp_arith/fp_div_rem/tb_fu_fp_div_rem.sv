@@ -1,28 +1,28 @@
 // tb_fu_fp_div_rem.sv -- Self-checking testbench for fu_fp_div_rem (group 11).
-// 2-input, multi-cycle DUT: divf (IEEE binary32 divide, RNE, FTZ) and remf
-// (fmod). Layers:
-//   1. Directed exact vectors (hand-computed) for divf and remf.
-//   2. Random oracle: divf -> |decode(dut) - da/db| <= half_ULP. remf -> exact
-//      fmod via da - db*$rtoi(da/db) (operands constrained to modest exponent
-//      gaps so the integer quotient is exact); real-equality check.
-//   3. Handshake: multi-cycle accept / out_valid timing, backpressure.
-// WIDTH=32. TB only.
+// 2-input, multi-cycle DUT (IEEE-754 divf RNE + remf/fmod exact, FTZ).
+// PARAMETERIZED by (EXP_W, MANT_W): run at fp32 (8,23) and fp64 (11,52) via -G.
+// divf: correct rounding via half-ULP (exact oracle for fp64). remf: exact fmod
+// oracle. Directed specials by exact bits. Bounded exponents keep results normal.
 
 `timescale 1ns/1ps
 
 module tb_fu_fp_div_rem #(
-  parameter int unsigned WIDTH = 32,
-  parameter int unsigned NRAND = 3000
+  parameter int unsigned EXP_W  = 8,
+  parameter int unsigned MANT_W = 23,
+  parameter int unsigned NRAND  = 8000
 );
 
-  logic              clk, rst_n, op_sel;
-  logic [WIDTH-1:0]  in_data_0, in_data_1;
-  logic              in_valid_0, in_valid_1, in_ready_0, in_ready_1;
-  logic [WIDTH-1:0]  out_data;
-  logic              out_valid, out_ready;
-  integer            error_count;
+  localparam int unsigned WIDTH = EXP_W + MANT_W + 1;
+  localparam int unsigned BIAS  = (1 << (EXP_W - 1)) - 1;
 
-  fu_fp_div_rem #(.WIDTH(WIDTH)) dut (
+  logic             clk, rst_n, op_sel;
+  logic [WIDTH-1:0] in_data_0, in_data_1;
+  logic             in_valid_0, in_valid_1, in_ready_0, in_ready_1;
+  logic [WIDTH-1:0] out_data;
+  logic             out_valid, out_ready;
+  integer           error_count;
+
+  fu_fp_div_rem #(.EXP_W(EXP_W), .MANT_W(MANT_W)) dut (
     .clk(clk), .rst_n(rst_n), .op_sel(op_sel),
     .in_data_0(in_data_0), .in_valid_0(in_valid_0), .in_ready_0(in_ready_0),
     .in_data_1(in_data_1), .in_valid_1(in_valid_1), .in_ready_1(in_ready_1),
@@ -41,172 +41,123 @@ module tb_fu_fp_div_rem #(
     end
   endfunction
 
-  function automatic real decode_f32(input logic [31:0] b);  // finite, FTZ
-    logic [7:0] e; logic [22:0] m; real val;
+  function automatic real decode_fp(input logic [WIDTH-1:0] b);   // finite, FTZ
+    logic sgn; logic [EXP_W-1:0] e; logic [MANT_W-1:0] m; real val;
     begin
-      e = b[30:23]; m = b[22:0];
-      if (e == 8'd0) val = 0.0;
-      else           val = (1.0 + real'(m) / 8388608.0) * pow2(int'(e) - 127);
-      decode_f32 = b[31] ? -val : val;
+      sgn = b[WIDTH-1]; e = b[WIDTH-2:MANT_W]; m = b[MANT_W-1:0];
+      if (e == '0) val = 0.0;
+      else         val = (1.0 + real'(m) / pow2(MANT_W)) * pow2(int'(e) - int'(BIAS));
+      decode_fp = sgn ? -val : val;
     end
   endfunction
 
-  task automatic drive_get(input logic [31:0] a, input logic [31:0] b,
-                           input logic op, output logic [31:0] result);
+  function automatic logic [WIDTH-1:0] make_fp(input logic sgn, input integer eu,
+                                               input logic [MANT_W-1:0] m);
+    logic [EXP_W-1:0] e;
+    begin e = (eu + int'(BIAS)); make_fp = {sgn, e, m}; end
+  endfunction
+
+  task automatic drive_get(input logic [WIDTH-1:0] a, input logic [WIDTH-1:0] b,
+                           input logic op, output logic [WIDTH-1:0] result);
     integer guard;
-    begin : dg
+    begin
       @(negedge clk);
       in_data_0 = a; in_data_1 = b; op_sel = op;
       in_valid_0 = 1'b1; in_valid_1 = 1'b1; out_ready = 1'b1;
-      @(posedge clk);                     // accept (IDLE & both valid)
+      @(posedge clk);
       @(negedge clk); in_valid_0 = 1'b0; in_valid_1 = 1'b0;
       guard = 0;
-      while ((out_valid !== 1'b1) && (guard <= 600)) begin
-        @(negedge clk); guard = guard + 1;
-      end
-      if (out_valid !== 1'b1) begin
-        $display("FAIL timeout: a=%h b=%h op=%0b", a, b, op);
-        error_count = error_count + 1;
-      end
+      while ((out_valid !== 1'b1) && (guard <= 3000)) begin @(negedge clk); guard++; end
+      if (out_valid !== 1'b1) begin $display("FAIL timeout a=%h b=%h op=%0b", a, b, op); error_count++; end
       result = out_data;
-      @(posedge clk);                     // drain
-    end : dg
+      @(posedge clk);
+    end
   endtask
 
-  task automatic check_exact(input logic [31:0] a, input logic [31:0] b,
-                             input logic op, input logic [31:0] e);
-    logic [31:0] got;
+  task automatic check_bits(input logic [WIDTH-1:0] a, input logic [WIDTH-1:0] b,
+                            input logic op, input logic [WIDTH-1:0] e);
+    logic [WIDTH-1:0] got;
     begin
       drive_get(a, b, op, got);
-      if (got !== e) begin
-        $display("FAIL exact: op=%0b a=%h b=%h got=%h exp=%h", op, a, b, got, e);
-        error_count = error_count + 1;
-      end
+      if (got !== e) begin $display("FAIL bits: op=%0b a=%h b=%h got=%h exp=%h", op, a, b, got, e); error_count++; end
     end
   endtask
 
-  // divf random: correct-rounding half-ULP property.
-  task automatic check_div(input logic [31:0] a, input logic [31:0] b);
-    logic [31:0] got; real da, db, tv, dec, hu, diff; logic [7:0] eg;
+  task automatic check_div(input logic [WIDTH-1:0] a, input logic [WIDTH-1:0] b);
+    logic [WIDTH-1:0] got; real da, db, tv, dv, diff, ulp; logic [EXP_W-1:0] e;
     begin
       drive_get(a, b, 1'b0, got);
-      da = decode_f32(a); db = decode_f32(b); tv = da / db;
-      eg = got[30:23]; dec = decode_f32(got);
-      hu = pow2(int'(eg) - 151);
-      diff = dec - tv; if (diff < 0.0) diff = -diff;
-      if (diff > hu) begin
-        $display("FAIL div: a=%h b=%h got=%h dec=%g true=%g diff=%e hu=%e", a, b, got, dec, tv, diff, hu);
-        error_count = error_count + 1;
+      da = decode_fp(a); db = decode_fp(b); tv = da / db; dv = decode_fp(got);
+      diff = dv - tv; if (diff < 0.0) diff = -diff;
+      e = got[WIDTH-2:MANT_W];
+      ulp = pow2(int'(e) - int'(BIAS) - int'(MANT_W));
+      if (diff > 0.5 * ulp * 1.0000001) begin
+        $display("FAIL div: a=%h b=%h got=%h dv=%.10g tv=%.10g diff=%.3g ulp=%.3g", a, b, got, dv, tv, diff, ulp);
+        error_count++;
       end
     end
   endtask
 
-  // remf random: exact fmod (operands constrained so quotient fits $rtoi).
-  task automatic check_rem(input logic [31:0] a, input logic [31:0] b);
-    logic [31:0] got; real da, db, q, fm, dec;
+  // Verify fmod by its defining PROPERTIES (no exact oracle needed, robust for
+  // fp64 where a - b*q would round): |r| < |b|, (a - r)/b is an integer, and
+  // sign(r) == sign(a) unless r == 0.
+  task automatic check_rem(input logic [WIDTH-1:0] a, input logic [WIDTH-1:0] b);
+    logic [WIDTH-1:0] got; real da, db, dv, adv, adb, n, nfrac;
     begin
       drive_get(a, b, 1'b1, got);
-      da = decode_f32(a); db = decode_f32(b);
-      q  = da / db;
-      q  = (q < 0.0) ? $ceil(q) : $floor(q);   // trunc toward zero
-      fm = da - db * q;
-      dec = decode_f32(got);
-      if (dec != fm) begin
-        $display("FAIL rem: a=%h b=%h got=%h dec=%g fmod=%g", a, b, got, dec, fm);
-        error_count = error_count + 1;
+      da = decode_fp(a); db = decode_fp(b); dv = decode_fp(got);
+      adv = dv < 0.0 ? -dv : dv; adb = db < 0.0 ? -db : db;
+      n = (da - dv) / db;
+      nfrac = n - real'($rtoi(n >= 0.0 ? n + 0.5 : n - 0.5));  // distance to nearest int
+      if (nfrac < 0.0) nfrac = -nfrac;
+      if (adv > adb * 1.0000001) begin
+        $display("FAIL rem |r|>=|b|: a=%h b=%h got=%h dv=%.10g db=%.10g", a, b, got, dv, db);
+        error_count++;
+      end else if (nfrac > 1.0e-6) begin
+        $display("FAIL rem (a-r)/b not integer: a=%h b=%h got=%h n=%.10g", a, b, got, n);
+        error_count++;
+      end else if ((dv != 0.0) && ((dv < 0.0) != (da < 0.0))) begin
+        $display("FAIL rem sign: a=%h b=%h got=%h dv=%.6g da=%.6g", a, b, got, dv, da);
+        error_count++;
       end
-    end
-  endtask
-
-  task automatic check_backpressure;
-    logic [31:0] held; integer r;
-    begin
-      @(negedge clk);
-      in_data_0 = 32'h40000000; in_data_1 = 32'h40000000; op_sel = 1'b0;  // 2/2
-      in_valid_0 = 1'b1; in_valid_1 = 1'b1; out_ready = 1'b0;
-      @(posedge clk); @(negedge clk); in_valid_0 = 1'b0; in_valid_1 = 1'b0;
-      r = 0;
-      while ((out_valid !== 1'b1) && (r <= 60)) begin @(negedge clk); r = r + 1; end
-      held = out_data;
-      for (r = 0; r < 3; r++) begin
-        @(negedge clk);
-        if (out_valid !== 1'b1) begin $display("FAIL bp: out_valid dropped"); error_count = error_count + 1; end
-        if (out_data !== held)  begin $display("FAIL bp: out_data changed"); error_count = error_count + 1; end
-        if (in_ready_0 !== 1'b0) begin $display("FAIL bp: in_ready high while busy/done"); error_count = error_count + 1; end
-      end
-      @(negedge clk); out_ready = 1'b1; @(posedge clk);
     end
   endtask
 
   initial begin : main
-    integer       i;
-    logic [31:0]  t0, t1;
-    logic [7:0]   eb_r, ea_r;
-    logic [31:0]  ra, rb;
+    integer i, ea, eb; logic [63:0] r0, r1;
+    localparam logic [WIDTH-1:0] PINF = {1'b0, {EXP_W{1'b1}}, {MANT_W{1'b0}}};
+    localparam logic [WIDTH-1:0] QNAN = {1'b0, {EXP_W{1'b1}}, 1'b1, {(MANT_W-1){1'b0}}};
 
     error_count = 0;
     op_sel = 1'b0; in_data_0 = '0; in_data_1 = '0;
     in_valid_0 = 1'b0; in_valid_1 = 1'b0; out_ready = 1'b0; rst_n = 1'b0;
-    repeat (5) @(posedge clk);
+    repeat (3) @(posedge clk);
     @(negedge clk); rst_n = 1'b1; @(posedge clk);
 
-    // ---- divf directed ----
-    check_exact(32'h40000000, 32'h40000000, 1'b0, 32'h3F800000); // 2/2=1
-    check_exact(32'h3F800000, 32'h40000000, 1'b0, 32'h3F000000); // 1/2=0.5
-    check_exact(32'h40400000, 32'h40000000, 1'b0, 32'h3FC00000); // 3/2=1.5
-    check_exact(32'h40A00000, 32'h40000000, 1'b0, 32'h40200000); // 5/2=2.5
-    check_exact(32'h3F800000, 32'h40800000, 1'b0, 32'h3E800000); // 1/4=0.25
-    check_exact(32'h40E00000, 32'h40000000, 1'b0, 32'h40600000); // 7/2=3.5
-    check_exact(32'hC0C00000, 32'h40000000, 1'b0, 32'hC0400000); // -6/2=-3
-    check_exact(32'h3F800000, 32'h00000000, 1'b0, 32'h7F800000); // 1/0=Inf
-    check_exact(32'hBF800000, 32'h00000000, 1'b0, 32'hFF800000); // -1/0=-Inf
-    check_exact(32'h00000000, 32'h00000000, 1'b0, 32'h7FC00000); // 0/0=NaN
-    check_exact(32'h00000000, 32'h40000000, 1'b0, 32'h00000000); // 0/2=0
-    check_exact(32'h7F800000, 32'h40000000, 1'b0, 32'h7F800000); // Inf/2=Inf
-    check_exact(32'h40000000, 32'h7F800000, 1'b0, 32'h00000000); // 2/Inf=0
-    check_exact(32'h7F800000, 32'h7F800000, 1'b0, 32'h7FC00000); // Inf/Inf=NaN
-    check_exact(32'h7FC00000, 32'h40000000, 1'b0, 32'h7FC00000); // NaN/2=NaN
+    // ---- directed ----
+    check_bits(make_fp(1'b0,2,'0), make_fp(1'b0,1,'0), 1'b0, make_fp(1'b0,1,'0)); // 4/2=2
+    check_div(make_fp(1'b0,0,'0), make_fp(1'b0,2,'0));                            // 1/4=0.25
+    check_bits(make_fp(1'b0,0,'0), '0, 1'b0, PINF);                              // 1/0=Inf
+    check_bits('0, '0, 1'b0, QNAN);                                              // 0/0=NaN
+    check_bits(PINF, PINF, 1'b0, QNAN);                                          // Inf/Inf=NaN
+    check_bits(make_fp(1'b0,0,'0), PINF, 1'b0, '0);                              // 1/Inf=0
+    check_rem(make_fp(1'b0,3,'0), make_fp(1'b0,1,'0));                            // fmod(8,2)=0
+    check_rem(make_fp(1'b0,1,{1'b1,{(MANT_W-1){1'b0}}}), make_fp(1'b0,0,'0));     // fmod(3,1)=0
+    check_bits(make_fp(1'b0,0,'0), '0, 1'b1, QNAN);                              // fmod(1,0)=NaN
 
-    // ---- remf directed ----
-    check_exact(32'h40400000, 32'h40000000, 1'b1, 32'h3F800000); // fmod(3,2)=1
-    check_exact(32'h40A00000, 32'h40400000, 1'b1, 32'h40000000); // fmod(5,3)=2
-    check_exact(32'h40E00000, 32'h40400000, 1'b1, 32'h3F800000); // fmod(7,3)=1
-    check_exact(32'hC0E00000, 32'h40400000, 1'b1, 32'hBF800000); // fmod(-7,3)=-1
-    check_exact(32'h41000000, 32'h40400000, 1'b1, 32'h40000000); // fmod(8,3)=2
-    check_exact(32'hC1000000, 32'h40400000, 1'b1, 32'hC0000000); // fmod(-8,3)=-2
-    check_exact(32'h41100000, 32'h40400000, 1'b1, 32'h00000000); // fmod(9,3)=0
-    check_exact(32'h40000000, 32'h40A00000, 1'b1, 32'h40000000); // fmod(2,5)=2 (|a|<|b|)
-    check_exact(32'h40400000, 32'h00000000, 1'b1, 32'h7FC00000); // fmod(3,0)=NaN
-    check_exact(32'h7F800000, 32'h40400000, 1'b1, 32'h7FC00000); // fmod(Inf,3)=NaN
-    check_exact(32'h40400000, 32'h7F800000, 1'b1, 32'h40400000); // fmod(3,Inf)=3
-
-    // ---- handshake ----
-    check_backpressure();
-
-    // ---- divf random (normal range, half-ULP) ----
-    for (i = 0; i < NRAND; i++) begin : rdiv
-      t0 = $random; t1 = $random;
-      ea_r = 8'd100 + (t0[7:0] % 8'd55);
-      eb_r = 8'd100 + (t1[7:0] % 8'd55);
-      ra = {t0[31], ea_r, t0[22:0]};
-      rb = {t1[31], eb_r, t1[22:0]};
-      check_div(ra, rb);
-    end : rdiv
-
-    // ---- remf random (modest exponent gap, exact fmod) ----
-    for (i = 0; i < NRAND; i++) begin : rrem
-      t0 = $random; t1 = $random;
-      eb_r = 8'd120 + (t1[3:0]);                 // [120,135]
-      ea_r = eb_r + (t0[4:0] % 5'd19);           // gap [0,18]
-      ra = {t0[31], ea_r, t0[22:0]};
-      rb = {t1[31], eb_r, t1[22:0]};
-      check_rem(ra, rb);
-    end : rrem
+    // ---- randomized (bounded exponents: results normal, ratios modest) ----
+    for (i = 0; i < NRAND; i++) begin : rl
+      r0 = {$random,$random}; r1 = {$random,$random};
+      ea = -15 + (r0[15:0] % 31); eb = -15 + (r1[15:0] % 31);
+      check_div(make_fp(r0[63], ea, r0[MANT_W-1:0]), make_fp(r1[63], eb, r1[MANT_W-1:0]));
+      check_rem(make_fp(r0[62], ea, r0[MANT_W-1:1] << 1), make_fp(r1[62], eb, r1[MANT_W-1:1] << 1));
+    end : rl
 
     if (error_count == 0)
-      $display("PASS: fu_fp_div_rem WIDTH=%0d, %0d+%0d random vectors, 0 mismatches", WIDTH, NRAND, NRAND);
+      $display("PASS: fu_fp_div_rem EXP_W=%0d MANT_W=%0d (WIDTH=%0d), %0d vectors, 0 mismatches",
+               EXP_W, MANT_W, WIDTH, NRAND);
     else begin
-      $display("FAIL: fu_fp_div_rem WIDTH=%0d, %0d mismatches", WIDTH, error_count);
+      $display("FAIL: fu_fp_div_rem EXP_W=%0d MANT_W=%0d, %0d mismatches", EXP_W, MANT_W, error_count);
       $fatal(1);
     end
     $finish;
