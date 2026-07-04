@@ -429,7 +429,8 @@ def test_generate_group14_writes_file(tmp_path):
     assert out.name == "fu_cordic_hyp.sv"
     text = out.read_text()
     assert "module fu_cordic_hyp" in text
-    assert "32'sd324135026" in text   # x0 = 1/A_h (Q4.28)
+    assert "ATANH [0:NITER-1]" in text         # per-format generated CORDIC table
+    assert "EXP_W  = 8" in text and "MANT_W = 23" in text
 
 
 def test_generate_group14_golden_matches_committed_rtl(tmp_path):

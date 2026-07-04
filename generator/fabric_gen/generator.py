@@ -130,7 +130,7 @@ def _cordic_context(name, fmt):
             g *= 1.0 / math.sqrt(1.0 - 4.0 ** (-i))
         ctx.update(
             x0_lit=lit(g),             # 1/Ah seeds cosh
-            hidx=seq,                  # per-step shift index
+            hsh_lits=[f"7'd{i}" for i in seq],   # per-step shift index (SHIFT table)
             atanh_lits=[lit(math.atanh(2.0 ** -i)) for i in seq],
         )
     return ctx
