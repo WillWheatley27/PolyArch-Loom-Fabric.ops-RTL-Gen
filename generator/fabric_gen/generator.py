@@ -88,6 +88,26 @@ def _poly_context(name, fmt):
     return ctx
 
 
+def _tanherf_context(fmt):
+    """Compile-time-generated tanh/erf tables (LUT, not polynomial -- these stiff
+    sigmoids are poly-hostile). T[k] = f(k/32) * 2^MANT_W for k=0..128 over [0,4],
+    rendered as sized literals; the RTL interpolates + clz-encodes."""
+    mant_w = fmt["mant_w"]
+    tw = mant_w + 1
+    scale = 1 << mant_w
+
+    def tbl(fn):
+        out = []
+        for k in range(129):
+            v = round(fn(k / 32.0) * scale)
+            if v > scale:
+                v = scale                      # clamp to 1.0
+            out.append(f"{tw}'d{v}")
+        return out
+
+    return {"tw": tw, "tanh_lits": tbl(math.tanh), "erf_lits": tbl(math.erf)}
+
+
 def generate(op_string, out_dir, width=None, fmt=None, registry_path=None):
     parsed = parse_op_string(op_string)
     validate(parsed.op_list)  # raises ShareGroupError on illegal combinations
@@ -112,6 +132,7 @@ def generate(op_string, out_dir, width=None, fmt=None, registry_path=None):
     )
     fmt_desc = fp_format(fmt or DEFAULT_FP_FORMAT)
     poly = _poly_context(name, fmt_desc) if name in _POLY_GROUPS else {}
+    lut = _tanherf_context(fmt_desc) if name == "approx_tanh_erf" else {}
 
     tmpl = env.get_template(_TEMPLATE_MAP[name])
     text = tmpl.render(
@@ -122,6 +143,7 @@ def generate(op_string, out_dir, width=None, fmt=None, registry_path=None):
         params=grp.get("params", {}),
         fmt=fmt_desc,
         poly=poly,
+        lut=lut,
     )
 
     out_dir = Path(out_dir)

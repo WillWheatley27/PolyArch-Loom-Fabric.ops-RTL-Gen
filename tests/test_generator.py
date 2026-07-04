@@ -458,8 +458,9 @@ def test_generate_group19_writes_file(tmp_path):
     assert out.name == "fu_approx_tanh_erf.sv"
     text = out.read_text()
     assert "module fu_approx_tanh_erf" in text
-    assert "localparam logic [23:0] TANH_T [0:128]" in text
-    assert "localparam logic [23:0] ERF_T [0:128]" in text
+    assert "TANH_T [0:128]" in text     # compile-time-generated LUT (per format)
+    assert "ERF_T  [0:128]" in text
+    assert "EXP_W  = 8" in text and "MANT_W = 23" in text
 
 
 def test_generate_group19_golden_matches_committed_rtl(tmp_path):
