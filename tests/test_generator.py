@@ -489,8 +489,9 @@ def test_generate_group15_writes_file(tmp_path):
     assert out.name == "fu_exp_series.sv"
     text = out.read_text()
     assert "module fu_exp_series" in text
-    assert "32'sd1549082005" in text   # log2(e) in Q2.30
-    assert "localparam logic [23:0] TWO_F [0:128]" in text
+    assert "32'sd1549082005" in text   # log2(e) in Q2.30 (prescale, format-independent)
+    assert "EXP2F_C [0:E2DEG]" in text  # compile-time minimax polynomial (not a LUT)
+    assert "EXP_W  = 8" in text and "MANT_W = 23" in text
 
 
 def test_generate_group15_golden_matches_committed_rtl(tmp_path):
