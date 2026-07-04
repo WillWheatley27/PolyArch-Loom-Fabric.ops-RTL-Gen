@@ -26,7 +26,7 @@ verilator --lint-only -Wall "$RTL"
 
 echo "[demo] build + run TB (WIDTH=32) ..."
 verilator --binary --timing -Wno-WIDTHTRUNC -Wno-WIDTHEXPAND -Wno-UNUSEDSIGNAL -Wno-TIMESCALEMOD \
-  --top-module tb_fu_log_core -GWIDTH=32 --Mdir "$OUT/obj" -o sim \
+  --top-module tb_fu_log_core -GEXP_W=8 -GMANT_W=23 --Mdir "$OUT/obj" -o sim \
   "$RTL" "$TB"
 "$OUT/obj/sim" | tee "$OUT/sim.log"
 grep -q "^PASS:" "$OUT/sim.log"
