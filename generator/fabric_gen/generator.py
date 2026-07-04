@@ -41,6 +41,10 @@ _TEMPLATE_MAP = {
 _CARRY_TERM = "{{(WIDTH-1){1'b0}}, op_sel}"
 
 # Groups whose transcendental core is a compile-time-generated minimax polynomial.
+# NOTE: tanh/erf are intentionally NOT here -- as stiff sigmoids they need
+# high-degree polynomials with huge, ill-conditioned coefficients (max|c|~7.6e4,
+# i.e. ~2^43 in Q.FRAC), so a compile-time-generated LUT is the right form for
+# them; only the well-conditioned [0,1) functions use the polynomial core.
 _POLY_GROUPS = {"sqrt_rsqrt", "exp_series", "log_core"}
 
 
