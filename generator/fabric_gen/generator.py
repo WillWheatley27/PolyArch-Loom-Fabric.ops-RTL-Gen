@@ -88,6 +88,54 @@ def _poly_context(name, fmt):
     return ctx
 
 
+_CORDIC_GROUPS = {"cordic_trig", "cordic_hyp"}
+
+
+def _cordic_context(name, fmt):
+    """Per-format CORDIC constants (Q(QINT.QFRAC), sized signed literals):
+    trig -> circular gain + pi/(pi/2) + atan(2^-i) table; hyp -> hyperbolic gain
+    + atanh(2^-i) table with iterations 4,13,... repeated for convergence.
+    NITER scales with the format precision."""
+    mant_w = fmt["mant_w"]
+    qint = 4
+    qfrac = mant_w + 5
+    fxw = qint + qfrac
+    niter = mant_w + 1
+    scale = 1 << qfrac
+
+    def lit(v):
+        iv = round(v * scale)
+        return f"{fxw}'sd{iv}" if iv >= 0 else f"-{fxw}'sd{-iv}"
+
+    ctx = {"qint": qint, "qfrac": qfrac, "fxw": fxw, "niter": niter}
+    if name == "cordic_trig":
+        g = 1.0
+        for i in range(niter):
+            g *= 1.0 / math.sqrt(1.0 + 4.0 ** (-i))
+        ctx.update(
+            k_lit=lit(g), pi_lit=lit(math.pi), halfpi_lit=lit(math.pi / 2.0),
+            atan_lits=[lit(math.atan(2.0 ** -i)) for i in range(niter)],
+        )
+    else:  # cordic_hyp: hyperbolic, iterations 4,13,40,... repeated
+        seq, i, nxt = [], 1, 4
+        while len(seq) < niter:
+            seq.append(i)
+            if i == nxt:
+                seq.append(i)          # repeat this index
+                nxt = 3 * nxt + 1
+            i += 1
+        seq = seq[:niter]
+        g = 1.0
+        for i in seq:
+            g *= 1.0 / math.sqrt(1.0 - 4.0 ** (-i))
+        ctx.update(
+            x0_lit=lit(g),             # 1/Ah seeds cosh
+            hidx=seq,                  # per-step shift index
+            atanh_lits=[lit(math.atanh(2.0 ** -i)) for i in seq],
+        )
+    return ctx
+
+
 def _tanherf_context(fmt):
     """Compile-time-generated tanh/erf tables (LUT, not polynomial -- these stiff
     sigmoids are poly-hostile). T[k] = f(k/32) * 2^MANT_W for k=0..128 over [0,4],
@@ -133,6 +181,7 @@ def generate(op_string, out_dir, width=None, fmt=None, registry_path=None):
     fmt_desc = fp_format(fmt or DEFAULT_FP_FORMAT)
     poly = _poly_context(name, fmt_desc) if name in _POLY_GROUPS else {}
     lut = _tanherf_context(fmt_desc) if name == "approx_tanh_erf" else {}
+    cordic = _cordic_context(name, fmt_desc) if name in _CORDIC_GROUPS else {}
 
     tmpl = env.get_template(_TEMPLATE_MAP[name])
     text = tmpl.render(
@@ -144,6 +193,7 @@ def generate(op_string, out_dir, width=None, fmt=None, registry_path=None):
         fmt=fmt_desc,
         poly=poly,
         lut=lut,
+        cordic=cordic,
     )
 
     out_dir = Path(out_dir)

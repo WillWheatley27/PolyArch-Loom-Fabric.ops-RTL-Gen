@@ -398,7 +398,8 @@ def test_generate_group13_writes_file(tmp_path):
     assert out.name == "fu_cordic_trig.sv"
     text = out.read_text()
     assert "module fu_cordic_trig" in text
-    assert "32'sd163008219" in text   # CORDIC gain K (Q4.28)
+    assert "ATAN [0:NITER-1]" in text          # per-format generated CORDIC table
+    assert "EXP_W  = 8" in text and "MANT_W = 23" in text
 
 
 def test_generate_group13_golden_matches_committed_rtl(tmp_path):
