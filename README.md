@@ -46,6 +46,15 @@ golden `.sv`, a self-checking Verilator testbench, and a runnable demo under
 `demos/`. Groups 1–12 and 17 are bit-exact / correctly-rounded; the
 transcendental groups (13–16, 18, 19) are tolerance-verified approximations.
 
+**Parameterizable formats.** Every FU is parameterized and verified at multiple
+formats: integer FUs by `WIDTH` (8/16/32/64); floating-point and transcendental
+FUs by IEEE-754 format `(EXP_W, MANT_W)` — **fp32 and fp64** (bf16-capable) — via
+`--format {fp32,fp64,bf16}`. Format-specific data is generated at generation
+("compile") time: `formats.py` derives the shape constants, `approx.py` fits
+compile-time minimax polynomials for exp/log/sqrt (Horner, no ROM), and the
+tanh/erf LUT and CORDIC constant tables are generated per format. The structural
+FP units are genuinely parameterized SystemVerilog (one source, any format).
+
 ## Tests
 
 ```bash
