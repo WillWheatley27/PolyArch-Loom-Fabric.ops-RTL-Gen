@@ -41,7 +41,7 @@ _TEMPLATE_MAP = {
 _CARRY_TERM = "{{(WIDTH-1){1'b0}}, op_sel}"
 
 # Groups whose transcendental core is a compile-time-generated minimax polynomial.
-_POLY_GROUPS = {"sqrt_rsqrt", "exp_series"}
+_POLY_GROUPS = {"sqrt_rsqrt", "exp_series", "log_core"}
 
 
 def _poly_context(name, fmt):
@@ -72,6 +72,15 @@ def _poly_context(name, fmt):
     elif name == "exp_series":
         de, ce, _ = approx.fit_for_precision(lambda f: 2.0 ** f, 0.0, 1.0, target, max_degree=12)
         ctx.update(exp2f_deg=de, exp2f_coef_lits=lits(ce))
+    elif name == "log_core":
+        dl, cl, _ = approx.fit_for_precision(lambda f: math.log2(1.0 + f), 0.0, 1.0, target, max_degree=12)
+        sw = frac + 2   # width of scale constants (ONE needs frac+1 bits)
+        ctx.update(
+            log2m_deg=dl, log2m_coef_lits=lits(cl),
+            ln2_lit=f"{sw}'d{round(math.log(2.0) * scale)}",
+            invlog2_10_lit=f"{sw}'d{round((1.0 / math.log2(10.0)) * scale)}",
+            one_lit=f"{sw}'d{scale}",
+        )
     return ctx
 
 

@@ -521,8 +521,8 @@ def test_generate_group16_writes_file(tmp_path):
     assert out.name == "fu_log_core.sv"
     text = out.read_text()
     assert "module fu_log_core" in text
-    assert "32'sd5814540" in text   # ln2 in Q.23
-    assert "localparam logic signed [31:0] LOG2_M [0:128]" in text
+    assert "LOG2M_C [0:LDEG]" in text   # compile-time minimax polynomial (not a LUT)
+    assert "EXP_W  = 8" in text and "MANT_W = 23" in text
 
 
 def test_generate_group16_golden_matches_committed_rtl(tmp_path):
