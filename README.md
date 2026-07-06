@@ -55,6 +55,12 @@ compile-time minimax polynomials for exp/log/sqrt (Horner, no ROM), and the
 tanh/erf LUT and CORDIC constant tables are generated per format. The structural
 FP units are genuinely parameterized SystemVerilog (one source, any format).
 
+`scripts/verify_formats.sh` is the multi-format regression: it generates, lints,
+and simulates every FU's testbench at **each supported design point** (integer
+FUs at WIDTH 8/16/32/64; FP/transcendental FUs at fp32 and fp64) — 52
+configurations in total — rather than only the fp32/width-32 default the per-group
+`demos/` exercise.
+
 ## Tests
 
 ```bash
