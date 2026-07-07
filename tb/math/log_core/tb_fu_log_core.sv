@@ -24,6 +24,7 @@ module tb_fu_log_core #(
   logic             out_valid, out_ready;
   integer           error_count;
   real              max_rel;
+  real              TABS;   // format-aware absolute floor (set in main)
 
   fu_log_core #(.EXP_W(EXP_W), .MANT_W(MANT_W)) dut (
     .clk(clk), .rst_n(rst_n), .op_sel(op_sel),
@@ -97,7 +98,7 @@ module tb_fu_log_core #(
       aref = rv < 0.0 ? -rv : rv;
       rel = ad / (aref + 1.0e-12);
       if ((aref > 1.0e-3) && (rel > max_rel)) max_rel = rel;   // rel is meaningless near log's zero at x=1
-      if (ad > 1.0e-3 * aref + 1.0e-4) begin
+      if (ad > 1.0e-3 * aref + TABS) begin
         $display("FAIL tol: op=%0d x=%h (%.6g) got=%h (%.8g) ref=%.8g rel=%.3e", op, a, xr, got, dr, rv, rel);
         error_count++;
       end
@@ -119,6 +120,7 @@ module tb_fu_log_core #(
     localparam logic [WIDTH-1:0] QN   = {1'b0,{EXP_W{1'b1}},1'b1,{(MANT_W-1){1'b0}}};
 
     error_count = 0; max_rel = 0.0;
+    TABS = 1.0e-4; if (32.0*pow2(-int'(MANT_W)) > TABS) TABS = 32.0*pow2(-int'(MANT_W));   // bf16 0.25, else 1e-4
     op_sel = 2'd0; in_data_0 = '0; in_valid_0 = 1'b0; out_ready = 1'b0; rst_n = 1'b0;
     repeat (3) @(posedge clk);
     @(negedge clk); rst_n = 1'b1; @(posedge clk);

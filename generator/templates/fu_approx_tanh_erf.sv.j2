@@ -18,7 +18,8 @@ module {{ module_name }} #(
   localparam int unsigned BIAS   = (1 << (EXP_W - 1)) - 1,
   localparam int unsigned SIG_W  = MANT_W + 1,
   localparam int unsigned TW     = MANT_W + 1,          // table entry width (value*2^MANT_W)
-  localparam int unsigned RCONST = BIAS + MANT_W - 21,  // decode: u = sig >> (RCONST - e)
+  localparam int unsigned RCONST = BIAS + MANT_W - 21,  // decode: u = sig << (e - RCONST)
+  localparam int unsigned UW     = 24,                  // FIXED decode field: idx[22:16], frac[15:0]
   localparam int unsigned CLZ_W  = MANT_W + 9           // clz field (mantissa + guard/sticky)
 ) (
   input  logic              clk,
@@ -51,9 +52,9 @@ module {{ module_name }} #(
   logic [EXP_W-1:0]  e_in;
   logic [MANT_W-1:0] m_in;
   logic [SIG_W-1:0]  sig_in;
-  logic [15:0] sh;
+  logic signed [15:0] sh;
   // verilator lint_off UNUSEDSIGNAL
-  logic [SIG_W-1:0]  u;               // |x|*32 in Q?.16
+  logic [UW-1:0]     u;               // |x|*32 in fixed Q8.16 (idx=u[22:16], frac=u[15:0])
   logic [15+TW:0]    prod;            // frac(16) * delta(TW); low 16 dropped
   logic [CLZ_W-1:0]  magpad, norm_e;
   // verilator lint_on UNUSEDSIGNAL
@@ -71,14 +72,14 @@ module {{ module_name }} #(
     s_in = in_data_0[WIDTH-1]; e_in = in_data_0[WIDTH-2:MANT_W]; m_in = in_data_0[MANT_W-1:0];
     sig_in = {1'b1, m_in};
 
-    // decode |x| -> u (|x|*32, 16 fractional interp bits)
-    if (e_in == '0)                begin u = '0; sat = 1'b0; sh = '0; end
-    else if (32'(e_in) > RCONST)   begin u = '0; sat = 1'b1; sh = '0; end
-    else begin
-      sh  = 16'(RCONST) - 16'(e_in);
-      u   = sig_in >> sh;
-      sat = |u[SIG_W-1:23];                          // |x| >= 4
-    end
+    // decode |x| -> u = |x|*32 in a FIXED Q8.16 field (idx=u[22:16], frac=u[15:0]);
+    // sat purely by exponent (|x| >= 4 <=> unbiased exp >= 2). u = sig << (e - RCONST),
+    // handling both shift directions (small formats like bf16 need a left shift).
+    sh = signed'(16'(e_in)) - signed'(16'(RCONST));
+    if (e_in == '0)                    begin u = '0; sat = 1'b0; end
+    else if (32'(e_in) >= (BIAS + 2))  begin u = '0; sat = 1'b1; end   // |x| >= 4
+    else if (sh >= 0)                  begin u = UW'(sig_in) << sh[4:0]; sat = 1'b0; end  // MANT_W<=22
+    else                               begin u = UW'(sig_in >> (-sh));  sat = 1'b0; end   // MANT_W>=23
     idx  = {1'b0, u[22:16]};
     frac = u[15:0];
     idx1 = idx + 8'd1;

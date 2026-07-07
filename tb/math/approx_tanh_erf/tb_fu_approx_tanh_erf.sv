@@ -15,7 +15,7 @@ module tb_fu_approx_tanh_erf #(
 
   localparam int unsigned WIDTH = EXP_W + MANT_W + 1;
   localparam int unsigned BIAS  = (1 << (EXP_W - 1)) - 1;
-  localparam real TOL = 1.5e-3;   // 129-entry LUT + linear interp (step 1/32)
+  real TOL;   // LUT step (~5.8e-4) + format ULP; set in main
 
   logic             clk, rst_n, op_sel;
   logic [WIDTH-1:0] in_data_0;
@@ -113,6 +113,7 @@ module tb_fu_approx_tanh_erf #(
     integer i; logic [31:0] t; real x;
 
     error_count = 0; max_err = 0.0;
+    TOL = 2.0e-3 + 16.0 * pow2(-int'(MANT_W));   // step-limited + format ULP (bf16 ~0.127)
     op_sel = 1'b0; in_data_0 = '0; in_valid_0 = 1'b0; out_ready = 1'b0; rst_n = 1'b0;
     repeat (3) @(posedge clk);
     @(negedge clk); rst_n = 1'b1; @(posedge clk);

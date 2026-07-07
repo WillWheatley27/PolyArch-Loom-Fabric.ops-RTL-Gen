@@ -23,6 +23,7 @@ module tb_fu_exp_series #(
   logic             out_valid, out_ready;
   integer           error_count;
   real              max_rel;
+  real              TREL, TABS;   // format-aware tolerance (set in main)
 
   fu_exp_series #(.EXP_W(EXP_W), .MANT_W(MANT_W)) dut (
     .clk(clk), .rst_n(rst_n), .op_sel(op_sel),
@@ -89,7 +90,7 @@ module tb_fu_exp_series #(
       ad = dr - rv; if (ad < 0.0) ad = -ad;
       aref = rv < 0.0 ? -rv : rv;
       rel = ad / (aref + 1.0e-12); if (rel > max_rel) max_rel = rel;
-      if (ad > 1.0e-3 * aref + 1.0e-4) begin
+      if (ad > TREL * aref + TABS) begin
         $display("FAIL tol: op=%0d x=%h (%.6g) got=%h (%.8g) ref=%.8g rel=%.3e", op, a, xr, got, dr, rv, rel);
         error_count++;
       end
@@ -102,6 +103,8 @@ module tb_fu_exp_series #(
     integer i; logic [63:0] r; real x; logic [1:0] op;
 
     error_count = 0; max_rel = 0.0;
+    TREL = 2.0e-3; if (32.0*pow2(-int'(MANT_W)) > TREL) TREL = 32.0*pow2(-int'(MANT_W));   // bf16 0.25, else 2e-3
+    TABS = 1.0e-4; if (32.0*pow2(-int'(MANT_W)) > TABS) TABS = 32.0*pow2(-int'(MANT_W));   // expm1 near-0 + bf16
     op_sel = 2'd0; in_data_0 = '0; in_valid_0 = 1'b0; out_ready = 1'b0; rst_n = 1'b0;
     repeat (3) @(posedge clk);
     @(negedge clk); rst_n = 1'b1; @(posedge clk);

@@ -61,7 +61,7 @@ for spec in "${INT_GROUPS[@]}"; do
 done
 
 # --- Structural FP FUs: one generated file, re-parameterize by format ---
-echo "== structural FP FUs (fp32 + fp64) =="
+echo "== structural FP FUs (bf16 + fp32 + fp64) =="
 FP_GROUPS=(
   "int_to_fp:fabric.op[@arith.sitofp, @arith.uitofp]:int_arith/int_to_fp"
   "fp_to_int:fabric.op[@arith.fptosi, @arith.fptoui]:int_arith/fp_to_int"
@@ -73,12 +73,13 @@ FP_GROUPS=(
 for spec in "${FP_GROUPS[@]}"; do
   m=${spec%%:*}; rest=${spec#*:}; op=${rest%:*}; path=${rest##*:}
   d=build/vf/gen_$m; rm -rf "$d"; mkdir -p "$d"; GEN "$op" -o "$d"
+  run "${m}_bf16" "tb_fu_${m}" "$d/fu_${m}.sv" "tb/${path}/tb_fu_${m}.sv" "-GEXP_W=8 -GMANT_W=7"
   run "${m}_fp32" "tb_fu_${m}" "$d/fu_${m}.sv" "tb/${path}/tb_fu_${m}.sv" "-GEXP_W=8 -GMANT_W=23"
   run "${m}_fp64" "tb_fu_${m}" "$d/fu_${m}.sv" "tb/${path}/tb_fu_${m}.sv" "-GEXP_W=11 -GMANT_W=52"
 done
 
 # --- Data-bearing FUs (poly/LUT/CORDIC): generate per format ---
-echo "== poly/LUT/CORDIC FUs (generated per format) =="
+echo "== poly/LUT/CORDIC FUs (generated per format: bf16 + fp32 + fp64) =="
 DATA_GROUPS=(
   "cordic_trig:fabric.op[@math.sin, @math.cos]:math/cordic_trig"
   "cordic_hyp:fabric.op[@math.sinh, @math.cosh]:math/cordic_hyp"
@@ -89,7 +90,7 @@ DATA_GROUPS=(
 )
 for spec in "${DATA_GROUPS[@]}"; do
   m=${spec%%:*}; rest=${spec#*:}; op=${rest%:*}; path=${rest##*:}
-  for fmt in "fp32:8:23" "fp64:11:52"; do
+  for fmt in "bf16:8:7" "fp32:8:23" "fp64:11:52"; do
     fn=${fmt%%:*}; e=$(echo "$fmt"|cut -d: -f2); mw=$(echo "$fmt"|cut -d: -f3)
     d=build/vf/gen_${m}_${fn}; rm -rf "$d"; mkdir -p "$d"; GEN "$op" -o "$d" --format "$fn"
     run "${m}_${fn}" "tb_fu_${m}" "$d/fu_${m}.sv" "tb/${path}/tb_fu_${m}.sv" "-GEXP_W=$e -GMANT_W=$mw"

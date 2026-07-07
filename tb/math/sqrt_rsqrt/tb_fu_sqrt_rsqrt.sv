@@ -16,7 +16,7 @@ module tb_fu_sqrt_rsqrt #(
   localparam int unsigned WIDTH = EXP_W + MANT_W + 1;
   localparam int unsigned BIAS  = (1 << (EXP_W - 1)) - 1;
   // polynomial degree grows with format; tolerance tracks the achievable accuracy.
-  localparam real TOL_REL = (MANT_W >= 40) ? 1.0e-7 : 1.0e-5;
+  real TOL_REL;   // format-aware; poly-degree floor (~1e-10) or 32 ULP; set in main
 
   logic             clk, rst_n, op_sel;
   logic [WIDTH-1:0] in_data_0;
@@ -111,6 +111,7 @@ module tb_fu_sqrt_rsqrt #(
     localparam logic [WIDTH-1:0] QNAN = {1'b0, {EXP_W{1'b1}}, 1'b1, {(MANT_W-1){1'b0}}};
 
     error_count = 0; max_rel = 0.0;
+    TOL_REL = 32.0 * pow2(-int'(MANT_W)); if (TOL_REL < 1.0e-10) TOL_REL = 1.0e-10;  // bf16 0.25, fp32 3.8e-6, fp64 1e-10
     op_sel = 1'b0; in_data_0 = '0; in_valid_0 = 1'b0; out_ready = 1'b0; rst_n = 1'b0;
     repeat (3) @(posedge clk);
     @(negedge clk); rst_n = 1'b1; @(posedge clk);
